@@ -272,6 +272,25 @@ function Get-ServedFingerprint {
     }
 }
 
+function Wait-ServedFingerprint {
+    param([object]$Binding, [string]$ExpectedFingerprint)
+
+    $deadline = (Get-Date).AddSeconds([int]$script:Config.verify_retry_timeout_seconds)
+    $lastResult = $null
+    do {
+        try {
+            $lastResult = Normalize-Fingerprint (Get-ServedFingerprint $Binding)
+            if ($lastResult -eq $ExpectedFingerprint) { return $lastResult }
+        }
+        catch {
+            $lastResult = "ERROR: $($_.Exception.Message)"
+        }
+        Start-Sleep -Seconds ([int]$script:Config.verify_retry_interval_seconds)
+    } while ((Get-Date) -lt $deadline)
+
+    throw "IIS did not serve the expected certificate for $($Binding.binding_id); last result: $lastResult"
+}
+
 function Send-DeploymentReport {
     param(
         [int]$DeploymentId,
@@ -356,10 +375,7 @@ function Install-DeploymentGroup {
 
         $servedFingerprint = $null
         foreach ($plan in $Plans) {
-            $servedFingerprint = Normalize-Fingerprint (Get-ServedFingerprint $plan.binding)
-            if ($servedFingerprint -ne $expectedFingerprint) {
-                throw "IIS served fingerprint mismatch for $($plan.binding.binding_id). Expected $expectedFingerprint; received $servedFingerprint"
-            }
+            $servedFingerprint = Wait-ServedFingerprint $plan.binding $expectedFingerprint
         }
 
         Send-DeploymentReport $deploymentId 'SUCCESS' $Token $MachineId $installedFingerprint $servedFingerprint 'PFX imported, IIS bindings updated, and served certificate verified'

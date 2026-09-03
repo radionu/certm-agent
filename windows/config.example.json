@@ -8,5 +8,7 @@
   ],
   "request_timeout_seconds": 60,
   "verify_timeout_seconds": 15,
+  "verify_retry_timeout_seconds": 30,
+  "verify_retry_interval_seconds": 2,
   "verify_connect_host": ""
 }

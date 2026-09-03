@@ -12,7 +12,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this installer from an elevated PowerShell window.'
 }
@@ -56,6 +56,8 @@ $config = [ordered]@{
     managed_domains = @($ManagedDomains | ForEach-Object { $_.Trim().TrimEnd('.').ToLowerInvariant() })
     request_timeout_seconds = 60
     verify_timeout_seconds = 15
+    verify_retry_timeout_seconds = 30
+    verify_retry_interval_seconds = 2
     verify_connect_host = $VerifyConnectHost
 }
 $config | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run CertM certificate deployment agent periodically
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+RandomizedDelaySec=15min
+Persistent=true
+Unit=certm-agent.service
+
+[Install]
+WantedBy=timers.target

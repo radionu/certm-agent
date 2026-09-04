@@ -452,6 +452,31 @@ server {{
             self.assertIn("certificate-11/fullchain.pem", rendered)
             self.assertNotIn("ssl/shared/fullchain.pem", rendered)
 
+    def test_dry_run_validates_config_edits_without_downloading_or_writing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path, original, bindings = self.fixture(temporary)
+            old = self.configure(temporary)
+            desired_values = [
+                self.desired(10, "a" * 64),
+                self.desired(11, "b" * 64),
+            ]
+            try:
+                with mock.patch.object(agent, "api_request") as request:
+                    changed = agent.deploy_split_group(
+                        bindings,
+                        desired_values,
+                        "token",
+                        "machine",
+                        dry_run=True,
+                    )
+            finally:
+                agent.CONFIG = old
+
+            self.assertFalse(changed)
+            request.assert_not_called()
+            self.assertEqual(config_path.read_text(), original)
+            self.assertFalse((Path(temporary) / "managed").exists())
+
     def test_reload_failure_restores_config_and_removes_new_managed_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_path, original, bindings = self.fixture(temporary)

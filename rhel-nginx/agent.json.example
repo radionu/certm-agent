@@ -9,6 +9,7 @@
   },
   "paths": {
     "backup_root": "/opt/certm-agent/bkup",
+    "managed_certificate_root": "/etc/certm/live",
     "log_file": "/var/log/certm/certm-agent.log",
     "lock_file": "/run/certm-agent.lock",
     "state_root": "/var/lib/certm/bindings"
@@ -24,6 +25,9 @@
   },
   "discovery": {
     "max_bindings": 1000,
+    "allowed_config_roots": [
+      "/etc/nginx"
+    ],
     "allowed_certificate_roots": [
       "/etc/certm",
       "/etc/nginx",

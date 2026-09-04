@@ -56,6 +56,8 @@ Set-ExecutionPolicy -Scope Process Bypass
   -EnrollmentToken 'PASTE_ENROLLMENT_KEY'
 ```
 
+The default installation is staged: it creates the scheduled task in a disabled state and does not run the agent. This prevents enrollment or certificate changes from racing ahead of administrator validation. `-RunOnce` and `-EnableTask` are explicit opt-ins for unattended deployments.
+
 Every IIS HTTPS binding with a host name is evaluated dynamically on each run. There is no static domain allowlist in the agent configuration. CertM returns a deployment only when a certificate assigned to that client covers the binding domain.
 
 To upgrade an existing installation while preserving its DPAPI-protected client identity, run the installer without an enrollment token:
@@ -70,15 +72,28 @@ Inspect current IIS bindings without contacting CertM or changing certificates:
 & 'C:\CertM\bin\CertM.Agent.ps1' -Mode Discover
 ```
 
+Enroll a new client after discovery has been reviewed. Enrollment exits without changing IIS while the client waits for administrator approval:
+
+```powershell
+& 'C:\CertM\bin\CertM.Agent.ps1'
+```
+
 After client approval, evaluate desired changes without importing a PFX or changing IIS:
 
 ```powershell
 & 'C:\CertM\bin\CertM.Agent.ps1' -Mode DryRun
 ```
 
+After reviewing the dry run, perform one supervised deployment and only then enable automation:
+
+```powershell
+& 'C:\CertM\bin\CertM.Agent.ps1'
+Enable-ScheduledTask -TaskName 'CertM IIS Agent'
+```
+
 The installer creates:
 
-- task `CertM IIS Agent`, running as `SYSTEM` every 30 minutes;
+- task `CertM IIS Agent`, running as `SYSTEM` every 30 minutes and disabled by default;
 - program directory `C:\CertM\bin`;
 - protected configuration `C:\CertM\config.json`;
 - state file `C:\CertM\state.json` after the first deployment;

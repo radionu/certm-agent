@@ -1296,6 +1296,22 @@ def binding_with_managed_paths(binding, paths):
     return updated
 
 
+def public_binding(binding):
+    fields = (
+        "site_name",
+        "domain",
+        "port",
+        "protocol",
+        "listen_host",
+        "certificate_path",
+        "key_path",
+        "certificate_write_path",
+        "key_write_path",
+        "binding_id",
+    )
+    return {field: binding[field] for field in fields}
+
+
 def nginx_test_reload():
     run(["nginx", "-t"])
     unit = str(CONFIG.get("service", {}).get("systemd_unit", "nginx"))
@@ -1677,7 +1693,12 @@ def main():
             preflight()
         elif args.command == "discover":
             validate_local_environment()
-            print(json.dumps(discover_bindings(), indent=2))
+            print(
+                json.dumps(
+                    [public_binding(binding) for binding in discover_bindings()],
+                    indent=2,
+                )
+            )
         elif args.command == "inventory":
             inventory()
         else:

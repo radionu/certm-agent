@@ -1,55 +1,84 @@
-# CertM Agent 0.4.0 — native API v2
+# CertM nginx Agent 1.0.0-rc.1
 
-This is the public RHEL-family Linux + nginx agent for CertM.
+Public pull-based API v2 agent for RHEL-family Linux and nginx.
 
-## Security boundary
+## Dynamic discovery
 
-This repository contains only deployable agent code and examples. Do not commit enrollment keys, client tokens, certificate private keys, production `agent.json`, or CertM server-side source.
+The agent runs `nginx -T` at the start of every `discover`, `inventory`, and `renew` operation. Domains and certificate paths are not stored in `agent.json`.
 
-## Current status
+It discovers concrete DNS names from HTTPS `server` blocks containing:
 
-The repository migration has started. Preflight/enrollment code, installer, safe example config, and systemd units are present. The full native-v2 renew/deploy/rollback pipeline is being moved from the private CertM server repository next. Do not enable the timer until the renew pipeline is published and manually tested.
+- a `listen ... ssl` directive;
+- one or more concrete `server_name` values;
+- exactly one `ssl_certificate` path;
+- exactly one `ssl_certificate_key` path.
 
-## Clone
+IPv4 and IPv6 listeners for the same domain and port are deduplicated. A newly added vhost appears in the next inventory. A removed vhost is omitted, allowing CertM to mark its previous binding as `REMOVED`.
+
+For safety, the agent skips regex, wildcard, variable, and hostless `server_name` values; variable certificate paths; dual RSA/ECDSA certificate blocks; and paths outside `discovery.allowed_certificate_roots`.
+
+## Shared certificate paths
+
+Multiple domains may use the same nginx certificate/key paths. CertM replaces that pair only when every discovered domain sharing it:
+
+1. has an active certificate assignment; and
+2. resolves to the same certificate version and package revision.
+
+The downloaded certificate must cover every concrete domain in the group. Otherwise the files are not changed.
+
+## Install or upgrade
 
 ```bash
 git clone https://github.com/radionu/certm-agent.git
 cd certm-agent/rhel-nginx
-```
-
-## Install
-
-```bash
-chmod +x install.sh certm-agent.py
+chmod +x install.sh
 sudo ./install.sh
 ```
 
-If `/etc/certm/agent.json` already exists, the installer preserves it.
+The installer preserves the existing token, migrates a version 2 config to version 3, and removes obsolete static `management.bindings` data. Review `discovery.allowed_certificate_roots` after an upgrade.
 
-Agent 0.4.0 requires:
+## Commands
 
-- `config_version: 2`
-- `api_base` ending in `/api/v2`
-- at least one `management.bindings[]` entry
+Local discovery without changing certificates:
 
-## Preflight
+```bash
+sudo /opt/certm-agent/certm-agent.py discover
+```
+
+Validate the host and enroll or check identity:
 
 ```bash
 sudo /opt/certm-agent/certm-agent.py preflight
 ```
 
-The agent uses `/api/v2/client/preflight` and `/api/v2/client/enroll`.
-
-## Upgrade workflow
-
-For source-based test deployments:
+Submit inventory only:
 
 ```bash
-cd /opt/certm-agent-src
-git pull --ff-only
-cd rhel-nginx
-sudo ./install.sh
-sudo /opt/certm-agent/certm-agent.py preflight
+sudo /opt/certm-agent/certm-agent.py inventory
 ```
 
-For production, versioned tags/releases should be used instead of blindly following `main`.
+Evaluate desired deployments without changing certificate files:
+
+```bash
+sudo /opt/certm-agent/certm-agent.py renew --dry-run
+```
+
+Perform a normal renewal run:
+
+```bash
+sudo /opt/certm-agent/certm-agent.py renew
+```
+
+## Deployment safety
+
+Before modifying nginx, the agent validates API metadata, base64 encoding, certificate/private-key matching, fullchain order, and coverage for all domains sharing the target paths. It backs up the current files, writes atomically, restores SELinux contexts when `restorecon` is available, runs `nginx -t`, reloads nginx, and verifies the served SHA-256 fingerprint through SNI.
+
+If validation, reload, or served-certificate verification fails, the previous complete certificate/key pair is restored and nginx is revalidated and reloaded.
+
+Do not enable the timer until `discover` and `renew --dry-run` have been reviewed on that server.
+
+```bash
+sudo systemctl enable --now certm-agent.timer
+```
+
+For production, install a reviewed release tag rather than following `main`.

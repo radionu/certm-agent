@@ -1,11 +1,8 @@
 {
-  "config_version": 2,
+  "config_version": 3,
   "api_base": "https://certm.pmr.vn/api/v2",
   "enrollment_token_protected": "created-by-installer",
   "client_token_protected": null,
-  "managed_domains": [
-    "*.pmr.vn"
-  ],
   "request_timeout_seconds": 60,
   "verify_timeout_seconds": 15,
   "verify_retry_timeout_seconds": 30,

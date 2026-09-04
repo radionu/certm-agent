@@ -1,5 +1,7 @@
 config.json
 state.json
 *.log
+__pycache__/
+*.py[cod]
 *.pfx
 staging/

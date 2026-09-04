@@ -1,5 +1,5 @@
 {
-  "config_version": 2,
+  "config_version": 3,
   "api_base": "https://certm.pmr.vn/api/v2",
   "client_token": "PUT_ENROLLMENT_KEY_OR_CLIENT_TOKEN_HERE",
   "machine_id_file": "/etc/machine-id",
@@ -17,21 +17,19 @@
     "api_timeout_seconds": 30
   },
   "verify": {
-    "connect_host": "127.0.0.1",
+    "connect_host": "",
+    "connect_timeout_seconds": 15,
     "retry_timeout_seconds": 30,
     "retry_interval_seconds": 1
   },
-  "management": {
-    "bindings": [
-      {
-        "site_name": "example",
-        "domain": "example.pmr.vn",
-        "port": 443,
-        "certificate_dir": "/etc/certm/live/example",
-        "certificate_file": "certificate.pem",
-        "fullchain_file": "fullchain.pem",
-        "private_key_file": "privkey.pem"
-      }
+  "discovery": {
+    "max_bindings": 1000,
+    "allowed_certificate_roots": [
+      "/etc/certm",
+      "/etc/nginx",
+      "/etc/pki/tls",
+      "/etc/letsencrypt",
+      "/opt/certm-agent/live"
     ]
   }
 }

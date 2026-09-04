@@ -84,6 +84,27 @@ class NginxDiscoveryTest(unittest.TestCase):
         self.assertEqual({item["domain"] for item in groups[0]}, {"a.pmr.vn", "b.pmr.vn"})
         self.assertEqual({item["port"] for item in groups[0]}, {8443})
 
+    def test_records_editable_source_for_each_server_block(self):
+        configuration = r"""# configuration file /etc/nginx/conf.d/site.conf:
+server {
+    listen 443 ssl;
+    server_name editable.pmr.vn;
+    ssl_certificate /etc/nginx/ssl/shared/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/shared/privkey.pem;
+}
+"""
+        bindings, _ = self.discover(configuration)
+
+        self.assertEqual(bindings[0]["config_file"], "/etc/nginx/conf.d/site.conf")
+        self.assertIn("server_name editable.pmr.vn", bindings[0]["config_server_text"])
+        server_text = bindings[0]["config_server_text"]
+        start = bindings[0]["certificate_directive_start"]
+        end = bindings[0]["certificate_directive_end"]
+        self.assertEqual(
+            server_text[start:end],
+            "ssl_certificate /etc/nginx/ssl/shared/fullchain.pem;",
+        )
+
     def test_rejects_duplicate_domain_and_port_with_different_files(self):
         configuration = r"""
         server {
@@ -235,6 +256,8 @@ class NginxDiscoveryTest(unittest.TestCase):
         self.assertNotIn("management", config)
         self.assertNotIn("domains", config)
         self.assertTrue(config["discovery"]["allowed_certificate_roots"])
+        self.assertTrue(config["discovery"]["allowed_config_roots"])
+        self.assertEqual(config["paths"]["managed_certificate_root"], "/etc/certm/live")
 
 
 class NginxRenewPlanningTest(unittest.TestCase):
@@ -280,28 +303,255 @@ class NginxRenewPlanningTest(unittest.TestCase):
                 mock.patch.object(agent, "discover_bindings", return_value=self.bindings), \
                 mock.patch.object(agent, "push_inventory"), \
                 mock.patch.object(agent, "desired_for", side_effect=desired_values), \
-                mock.patch.object(agent, "deploy_group", return_value=False) as deploy:
+                mock.patch.object(agent, "deploy_group", return_value=False) as deploy, \
+                mock.patch.object(agent, "deploy_split_group", return_value=False) as split:
             agent.renew(dry_run=dry_run)
-            return deploy
+            return deploy, split
 
     def test_no_assignment_never_deploys(self):
-        deploy = self.renew_with([None, None])
+        deploy, split = self.renew_with([None, None])
         deploy.assert_not_called()
+        split.assert_not_called()
 
-    def test_shared_paths_require_every_domain_to_be_assigned(self):
-        with self.assertRaisesRegex(RuntimeError, "domains without a CertM assignment"):
-            self.renew_with([self.desired, None])
+    def test_shared_paths_with_partial_assignment_are_split(self):
+        deploy, split = self.renew_with([self.desired, None], dry_run=True)
+        deploy.assert_not_called()
+        split.assert_called_once()
+        self.assertTrue(split.call_args.args[-1])
 
-    def test_shared_paths_require_the_same_desired_certificate(self):
+    def test_shared_paths_with_different_certificates_are_split(self):
         different = dict(self.desired)
         different["certificate_id"] = 11
-        with self.assertRaisesRegex(RuntimeError, "different desired certificates"):
-            self.renew_with([self.desired, different])
+        deploy, split = self.renew_with([self.desired, different], dry_run=True)
+        deploy.assert_not_called()
+        split.assert_called_once()
 
     def test_dry_run_is_forwarded_without_local_mutation(self):
-        deploy = self.renew_with([self.desired, self.desired], dry_run=True)
+        deploy, split = self.renew_with([self.desired, self.desired], dry_run=True)
         deploy.assert_called_once()
         self.assertTrue(deploy.call_args.args[-1])
+        split.assert_not_called()
+
+
+class NginxConfigSplitTest(unittest.TestCase):
+    def desired(self, certificate_id, fingerprint):
+        return {
+            "certificate_id": certificate_id,
+            "certificate_version_id": certificate_id * 10,
+            "version_id": "260901",
+            "package_revision": 1,
+            "deployment_revision": f"260901-r1-c{certificate_id}",
+            "fingerprint_sha256": fingerprint,
+        }
+
+    def fixture(self, root, same_server=False):
+        root = Path(root)
+        config_path = root / "nginx" / "conf.d" / "sites.conf"
+        config_path.parent.mkdir(parents=True)
+        shared = root / "nginx" / "ssl" / "shared"
+        shared.mkdir(parents=True)
+        (shared / "fullchain.pem").write_text("old certificate")
+        (shared / "privkey.pem").write_text("old key")
+        if same_server:
+            content = f"""server {{
+    listen 443 ssl;
+    server_name a.pmr.vn b.pmr.vn;
+    ssl_certificate {shared / 'fullchain.pem'};
+    ssl_certificate_key {shared / 'privkey.pem'};
+}}
+"""
+        else:
+            content = f"""server {{
+    listen 443 ssl;
+    server_name a.pmr.vn;
+    ssl_certificate {shared / 'fullchain.pem'};
+    ssl_certificate_key {shared / 'privkey.pem'};
+}}
+server {{
+    listen 443 ssl;
+    server_name b.pmr.vn;
+    ssl_certificate {shared / 'fullchain.pem'};
+    ssl_certificate_key {shared / 'privkey.pem'};
+}}
+"""
+        config_path.write_text(content)
+        dump = f"# configuration file {config_path}:\n{content}"
+        bindings, warnings = agent.bindings_from_dump(
+            dump,
+            Path("/"),
+            [str(root)],
+            1000,
+        )
+        self.assertEqual(warnings, [])
+        return config_path, content, bindings
+
+    def configure(self, root):
+        old = agent.CONFIG
+        agent.CONFIG = {
+            "paths": {
+                "backup_root": str(Path(root) / "backups"),
+                "managed_certificate_root": str(Path(root) / "managed"),
+                "state_root": str(Path(root) / "state"),
+            },
+            "discovery": {
+                "allowed_certificate_roots": [str(root)],
+                "allowed_config_roots": [str(Path(root) / "nginx")],
+            },
+        }
+        return old
+
+    def test_separate_server_blocks_can_resolve_to_different_profiles(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, _, bindings = self.fixture(temporary)
+            old = self.configure(temporary)
+            try:
+                targets, untouched = agent.split_plan(
+                    bindings,
+                    [self.desired(10, "a" * 64), self.desired(11, "b" * 64)],
+                )
+            finally:
+                agent.CONFIG = old
+
+            self.assertEqual(len(targets), 2)
+            self.assertEqual(untouched, [])
+            self.assertEqual(
+                {Path(item["paths"]["certificate_path"]).parent.name for item in targets},
+                {"certificate-10", "certificate-11"},
+            )
+
+    def test_one_server_block_cannot_receive_different_profiles(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, _, bindings = self.fixture(temporary, same_server=True)
+            old = self.configure(temporary)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "One nginx server block"):
+                    agent.split_plan(
+                        bindings,
+                        [self.desired(10, "a" * 64), self.desired(11, "b" * 64)],
+                    )
+            finally:
+                agent.CONFIG = old
+
+    def test_render_rewrites_only_the_two_certificate_directives(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path, original, bindings = self.fixture(temporary)
+            old = self.configure(temporary)
+            try:
+                targets, _ = agent.split_plan(
+                    bindings,
+                    [self.desired(10, "a" * 64), self.desired(11, "b" * 64)],
+                )
+                rendered = agent.render_split_config_updates(targets)[str(config_path)]
+            finally:
+                agent.CONFIG = old
+
+            self.assertIn("server_name a.pmr.vn;", rendered)
+            self.assertIn("server_name b.pmr.vn;", rendered)
+            self.assertNotEqual(rendered, original)
+            self.assertIn("certificate-10/fullchain.pem", rendered)
+            self.assertIn("certificate-11/fullchain.pem", rendered)
+            self.assertNotIn("ssl/shared/fullchain.pem", rendered)
+
+    def test_reload_failure_restores_config_and_removes_new_managed_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path, original, bindings = self.fixture(temporary)
+            old = self.configure(temporary)
+            desired_values = [
+                self.desired(10, "a" * 64),
+                self.desired(11, "b" * 64),
+            ]
+
+            def package(_response, desired, _domains):
+                return {
+                    "deployment_id": int(desired["certificate_id"]),
+                    "fullchain": f"certificate-{desired['certificate_id']}".encode(),
+                    "key": f"key-{desired['certificate_id']}".encode(),
+                    "expected": desired["fingerprint_sha256"],
+                }
+
+            def install(bindings_to_install, downloaded):
+                target = bindings_to_install[0]
+                Path(target["certificate_write_path"]).parent.mkdir(parents=True, exist_ok=True)
+                Path(target["certificate_write_path"]).write_bytes(downloaded["fullchain"])
+                Path(target["key_write_path"]).write_bytes(downloaded["key"])
+
+            try:
+                with mock.patch.object(agent, "api_request", return_value={}), \
+                        mock.patch.object(agent, "decode_package", side_effect=package), \
+                        mock.patch.object(agent, "install_package", side_effect=install), \
+                        mock.patch.object(
+                            agent,
+                            "nginx_test_reload",
+                            side_effect=[RuntimeError("nginx test failed"), None],
+                        ), \
+                        mock.patch.object(agent, "restore_selinux_context"), \
+                        mock.patch.object(agent, "report_deployment"):
+                    with self.assertRaisesRegex(RuntimeError, "rollback completed successfully"):
+                        agent.deploy_split_group(
+                            bindings,
+                            desired_values,
+                            "token",
+                            "machine",
+                        )
+            finally:
+                agent.CONFIG = old
+
+            self.assertEqual(config_path.read_text(), original)
+            self.assertFalse((Path(temporary) / "managed" / "certificate-10" / "fullchain.pem").exists())
+            self.assertFalse((Path(temporary) / "managed" / "certificate-11" / "fullchain.pem").exists())
+
+    def test_successful_split_installs_both_profiles_and_updates_config(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path, _, bindings = self.fixture(temporary)
+            old = self.configure(temporary)
+            desired_values = [
+                self.desired(10, "a" * 64),
+                self.desired(11, "b" * 64),
+            ]
+
+            def package(_response, desired, _domains):
+                return {
+                    "deployment_id": int(desired["certificate_id"]),
+                    "fullchain": f"certificate-{desired['certificate_id']}".encode(),
+                    "key": f"key-{desired['certificate_id']}".encode(),
+                    "expected": desired["fingerprint_sha256"],
+                }
+
+            def install(bindings_to_install, downloaded):
+                target = bindings_to_install[0]
+                Path(target["certificate_write_path"]).parent.mkdir(parents=True, exist_ok=True)
+                Path(target["certificate_write_path"]).write_bytes(downloaded["fullchain"])
+                Path(target["key_write_path"]).write_bytes(downloaded["key"])
+
+            def fingerprint(path):
+                return "a" * 64 if "certificate-10" in str(path) else "b" * 64
+
+            try:
+                with mock.patch.object(agent, "api_request", return_value={}), \
+                        mock.patch.object(agent, "decode_package", side_effect=package), \
+                        mock.patch.object(agent, "install_package", side_effect=install), \
+                        mock.patch.object(agent, "fingerprint_file", side_effect=fingerprint), \
+                        mock.patch.object(agent, "verify_served", side_effect=lambda _, expected: expected), \
+                        mock.patch.object(agent, "nginx_test_reload") as reload_nginx, \
+                        mock.patch.object(agent, "restore_selinux_context"), \
+                        mock.patch.object(agent, "report_deployment", return_value={"status": "ok"}) as report:
+                    changed = agent.deploy_split_group(
+                        bindings,
+                        desired_values,
+                        "token",
+                        "machine",
+                    )
+            finally:
+                agent.CONFIG = old
+
+            self.assertTrue(changed)
+            rendered = config_path.read_text()
+            self.assertIn("certificate-10/fullchain.pem", rendered)
+            self.assertIn("certificate-11/fullchain.pem", rendered)
+            self.assertTrue((Path(temporary) / "managed" / "certificate-10" / "privkey.pem").exists())
+            self.assertTrue((Path(temporary) / "managed" / "certificate-11" / "privkey.pem").exists())
+            reload_nginx.assert_called_once()
+            self.assertEqual(report.call_count, 2)
 
 
 class NginxDeploymentRollbackTest(unittest.TestCase):

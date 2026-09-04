@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.1"
+AGENT_VERSION = "1.0.0-rc.2"
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
 LOGGER = logging.getLogger("certm-agent")
 CONFIG = {}
@@ -44,6 +44,16 @@ class NginxNode:
     name: str
     args: List[str]
     children: Optional[List["NginxNode"]] = None
+    source_file: Optional[str] = None
+    start: int = 0
+    end: int = 0
+
+
+@dataclass
+class NginxToken:
+    value: str
+    start: int
+    end: int
 
 
 def log(message, level=logging.INFO):
@@ -59,8 +69,11 @@ def atomic_write(path, data, default_mode=0o600):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = default_mode
+    owner = None
     try:
-        mode = stat.S_IMODE(path.stat().st_mode)
+        existing = path.stat()
+        mode = stat.S_IMODE(existing.st_mode)
+        owner = (existing.st_uid, existing.st_gid)
     except FileNotFoundError:
         pass
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
@@ -72,6 +85,8 @@ def atomic_write(path, data, default_mode=0o600):
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, mode)
+        if owner is not None:
+            os.chown(temporary, owner[0], owner[1])
         os.replace(temporary, path)
     finally:
         try:
@@ -99,6 +114,27 @@ def load_config(path):
     for root in roots:
         if not Path(str(root)).is_absolute():
             raise RuntimeError(f"Allowed certificate root must be absolute: {root}")
+    config_roots = CONFIG.get("discovery", {}).get(
+        "allowed_config_roots",
+        ["/etc/nginx"],
+    )
+    if not isinstance(config_roots, list) or not config_roots:
+        raise RuntimeError("discovery.allowed_config_roots must not be empty")
+    for root in config_roots:
+        if not Path(str(root)).is_absolute():
+            raise RuntimeError(f"Allowed nginx config root must be absolute: {root}")
+    managed_root = Path(
+        CONFIG.get("paths", {}).get(
+            "managed_certificate_root",
+            "/etc/certm/live",
+        )
+    )
+    if not managed_root.is_absolute():
+        raise RuntimeError("paths.managed_certificate_root must be absolute")
+    if not path_is_allowed(managed_root, roots):
+        raise RuntimeError(
+            "paths.managed_certificate_root must be inside an allowed certificate root"
+        )
     return CONFIG
 
 
@@ -216,6 +252,13 @@ def validate_local_environment():
 
 def nginx_dump():
     result = run(["nginx", "-T"], timeout=60)
+    if "# configuration file " in result.stdout:
+        return result.stdout
+    if "# configuration file " in result.stderr:
+        return "".join(
+            line for line in result.stderr.splitlines(keepends=True)
+            if not line.lstrip().startswith("nginx:")
+        )
     return result.stdout + "\n" + result.stderr
 
 
@@ -229,16 +272,19 @@ def nginx_prefix():
 def tokenize_nginx(text):
     tokens = []
     current = []
+    current_start = None
     quote = None
     escaped = False
     comment = False
 
-    def flush():
+    def flush(end):
+        nonlocal current_start
         if current:
-            tokens.append("".join(current))
+            tokens.append(NginxToken("".join(current), current_start, end))
             current.clear()
+            current_start = None
 
-    for char in text:
+    for position, char in enumerate(text):
         if comment:
             if char == "\n":
                 comment = False
@@ -255,59 +301,118 @@ def tokenize_nginx(text):
                 current.append(char)
             continue
         if char == "#":
-            flush()
+            flush(position)
             comment = True
         elif char in ("'", '"'):
+            if current_start is None:
+                current_start = position
             quote = char
         elif char.isspace():
-            flush()
+            flush(position)
         elif char in ("{", "}", ";"):
-            flush()
-            tokens.append(char)
+            flush(position)
+            tokens.append(NginxToken(char, position, position + 1))
         else:
+            if current_start is None:
+                current_start = position
             current.append(char)
     if quote:
         raise RuntimeError("Unterminated quote in nginx configuration")
-    flush()
+    flush(len(text))
     return tokens
 
 
-def parse_nginx_nodes(tokens, start=0, nested=False):
+def parse_nginx_nodes(tokens, start=0, nested=False, source_file=None):
     nodes = []
     index = start
     while index < len(tokens):
-        if tokens[index] == "}":
+        if tokens[index].value == "}":
             if not nested:
                 raise RuntimeError("Unexpected closing brace in nginx configuration")
-            return nodes, index + 1
+            return nodes, index + 1, tokens[index].end
         words = []
-        while index < len(tokens) and tokens[index] not in ("{", "}", ";"):
+        while index < len(tokens) and tokens[index].value not in ("{", "}", ";"):
             words.append(tokens[index])
             index += 1
         if not words:
             raise RuntimeError("Invalid nginx configuration token sequence")
         if index >= len(tokens):
-            raise RuntimeError(f"Unterminated nginx directive: {' '.join(words)}")
+            raise RuntimeError(
+                f"Unterminated nginx directive: {' '.join(token.value for token in words)}"
+            )
         delimiter = tokens[index]
-        if delimiter == "}":
-            raise RuntimeError(f"Missing semicolon before closing brace: {' '.join(words)}")
-        if delimiter == ";":
-            nodes.append(NginxNode(words[0], words[1:]))
+        if delimiter.value == "}":
+            raise RuntimeError(
+                f"Missing semicolon before closing brace: "
+                f"{' '.join(token.value for token in words)}"
+            )
+        if delimiter.value == ";":
+            nodes.append(
+                NginxNode(
+                    words[0].value,
+                    [token.value for token in words[1:]],
+                    source_file=source_file,
+                    start=words[0].start,
+                    end=delimiter.end,
+                )
+            )
             index += 1
             continue
-        children, index = parse_nginx_nodes(tokens, index + 1, nested=True)
-        nodes.append(NginxNode(words[0], words[1:], children))
+        children, index, block_end = parse_nginx_nodes(
+            tokens,
+            index + 1,
+            nested=True,
+            source_file=source_file,
+        )
+        nodes.append(
+            NginxNode(
+                words[0].value,
+                [token.value for token in words[1:]],
+                children,
+                source_file=source_file,
+                start=words[0].start,
+                end=block_end,
+            )
+        )
     if nested:
         raise RuntimeError("Unclosed block in nginx configuration")
-    return nodes, index
+    return nodes, index, len(tokens)
+
+
+def nginx_dump_sections(text):
+    sections = []
+    source_file = None
+    lines = []
+    marker = re.compile(r"^# configuration file (.+):\s*$")
+    for line in text.splitlines(keepends=True):
+        match = marker.match(line.rstrip("\r\n"))
+        if match:
+            if source_file is not None:
+                sections.append((source_file, "".join(lines)))
+            source_file = match.group(1)
+            lines = []
+        elif source_file is not None:
+            lines.append(line)
+    if source_file is not None:
+        sections.append((source_file, "".join(lines)))
+    return sections
 
 
 def parse_nginx_dump(text):
-    filtered = "\n".join(
-        line for line in text.splitlines()
-        if not line.lstrip().startswith("nginx:")
-    )
-    nodes, _ = parse_nginx_nodes(tokenize_nginx(filtered))
+    sections = nginx_dump_sections(text)
+    if not sections:
+        sections = [(None, text)]
+    nodes = []
+    for source_file, content in sections:
+        filtered = content if source_file else "\n".join(
+            line for line in content.splitlines()
+            if not line.lstrip().startswith("nginx:")
+        )
+        parsed, _, _ = parse_nginx_nodes(
+            tokenize_nginx(filtered),
+            source_file=source_file,
+        )
+        nodes.extend(parsed)
     return nodes
 
 
@@ -324,6 +429,13 @@ def walk_server_nodes(nodes):
 def node_directives(node, name):
     return [
         child.args for child in (node.children or [])
+        if child.children is None and child.name.lower() == name.lower()
+    ]
+
+
+def direct_nodes(node, name):
+    return [
+        child for child in (node.children or [])
         if child.children is None and child.name.lower() == name.lower()
     ]
 
@@ -408,6 +520,7 @@ def bindings_from_dump(text, prefix, allowed_roots, max_bindings=1000):
     candidates = {}
     warnings = []
     roots = [Path(item) for item in allowed_roots]
+    source_contents = {source: content for source, content in nginx_dump_sections(text)}
 
     for position, server in enumerate(walk_server_nodes(parse_nginx_dump(text)), start=1):
         ssl_enabled = any(
@@ -436,13 +549,16 @@ def bindings_from_dump(text, prefix, allowed_roots, max_bindings=1000):
             warnings.append(f"server block {position}: no concrete DNS server_name")
             continue
 
-        certificate_values = {
-            str(args[0]) for args in node_directives(server, "ssl_certificate") if args
-        }
-        key_values = {
-            str(args[0]) for args in node_directives(server, "ssl_certificate_key") if args
-        }
-        if len(certificate_values) != 1 or len(key_values) != 1:
+        certificate_nodes = [node for node in direct_nodes(server, "ssl_certificate") if node.args]
+        key_nodes = [node for node in direct_nodes(server, "ssl_certificate_key") if node.args]
+        certificate_values = {str(node.args[0]) for node in certificate_nodes}
+        key_values = {str(node.args[0]) for node in key_nodes}
+        if (
+            len(certificate_values) != 1
+            or len(key_values) != 1
+            or len(certificate_nodes) != 1
+            or len(key_nodes) != 1
+        ):
             warnings.append(
                 f"server block {position}: require exactly one ssl_certificate and one ssl_certificate_key"
             )
@@ -470,6 +586,16 @@ def bindings_from_dump(text, prefix, allowed_roots, max_bindings=1000):
             )
             continue
 
+        certificate_node = certificate_nodes[0]
+        key_node = key_nodes[0]
+        source_content = source_contents.get(server.source_file)
+        server_text = (
+            source_content[server.start:server.end]
+            if source_content is not None else None
+        )
+        server_identity = hashlib.sha256(
+            f"{server.source_file or ''}\0{server.start}\0{server.end}\0{server_text or ''}".encode()
+        ).hexdigest()[:20]
         site_name = domains[0]
         for host, port in listens:
             for domain in domains:
@@ -484,6 +610,13 @@ def bindings_from_dump(text, prefix, allowed_roots, max_bindings=1000):
                     "certificate_write_path": str(certificate_write_path),
                     "key_write_path": str(key_write_path),
                     "binding_id": make_binding_id(domain, port, certificate_path, key_path),
+                    "config_file": server.source_file,
+                    "config_server_id": server_identity,
+                    "config_server_text": server_text,
+                    "certificate_directive_start": certificate_node.start - server.start,
+                    "certificate_directive_end": certificate_node.end - server.start,
+                    "key_directive_start": key_node.start - server.start,
+                    "key_directive_end": key_node.end - server.start,
                 }
                 identity = (domain, port)
                 existing = candidates.get(identity)
@@ -897,6 +1030,242 @@ def binding_groups(bindings):
     return [groups[key] for key in sorted(groups)]
 
 
+def managed_certificate_paths(desired):
+    certificate_id = int(desired["certificate_id"])
+    if certificate_id < 1:
+        raise RuntimeError("Desired certificate_id must be positive")
+    root = Path(
+        CONFIG.get("paths", {}).get(
+            "managed_certificate_root",
+            "/etc/certm/live",
+        )
+    )
+    allowed_roots = CONFIG.get("discovery", {}).get("allowed_certificate_roots", [])
+    directory = root / f"certificate-{certificate_id}"
+    certificate = directory / "fullchain.pem"
+    key = directory / "privkey.pem"
+    certificate_write = certificate.resolve(strict=False)
+    key_write = key.resolve(strict=False)
+    for path in (certificate, key, certificate_write, key_write):
+        if not path_is_allowed(path, allowed_roots):
+            raise RuntimeError(f"Managed certificate path is outside allowed roots: {path}")
+    if certificate_write == key_write:
+        raise RuntimeError("Managed certificate and key paths resolve to the same file")
+    return {
+        "certificate_path": str(certificate),
+        "key_path": str(key),
+        "certificate_write_path": str(certificate_write),
+        "key_write_path": str(key_write),
+    }
+
+
+def split_plan(bindings, desired_values):
+    if len(bindings) != len(desired_values):
+        raise RuntimeError("Internal error: binding and desired counts differ")
+    servers = {}
+    for binding, desired in zip(bindings, desired_values):
+        server_id = binding.get("config_server_id")
+        if not server_id:
+            raise RuntimeError(
+                f"Cannot locate nginx server block for {binding['domain']}:{binding['port']}"
+            )
+        item = servers.setdefault(
+            server_id,
+            {
+                "binding": binding,
+                "bindings": [],
+                "desired": [],
+            },
+        )
+        item["bindings"].append(binding)
+        item["desired"].append(desired)
+
+    for item in servers.values():
+        identities = {
+            desired_identity(value) if value is not None else None
+            for value in item["desired"]
+        }
+        if len(identities) != 1:
+            domains = sorted({binding["domain"] for binding in item["bindings"]})
+            raise RuntimeError(
+                "One nginx server block cannot use different CertM assignments: "
+                + ", ".join(domains)
+                + ". Split these server_name values into separate server blocks first"
+            )
+        item["desired"] = item["desired"][0]
+
+    targets = {}
+    untouched = []
+    for item in servers.values():
+        desired = item["desired"]
+        if desired is None:
+            untouched.extend(item["bindings"])
+            continue
+        identity = desired_identity(desired)
+        target = targets.setdefault(
+            identity,
+            {
+                "desired": desired,
+                "bindings": [],
+                "servers": [],
+                "paths": managed_certificate_paths(desired),
+            },
+        )
+        target["bindings"].extend(item["bindings"])
+        target["servers"].append(item)
+    target_values = list(targets.values())
+    path_owners = {}
+    for identity, target in targets.items():
+        path_key = (
+            target["paths"]["certificate_write_path"],
+            target["paths"]["key_write_path"],
+        )
+        previous = path_owners.get(path_key)
+        if previous is not None and previous != identity:
+            raise RuntimeError(
+                "Different desired certificate revisions resolve to the same managed paths"
+            )
+        path_owners[path_key] = identity
+    return target_values, untouched
+
+
+def nginx_path_literal(path):
+    value = str(path)
+    if not re.fullmatch(r"[A-Za-z0-9_./:+-]+", value):
+        raise RuntimeError(f"Managed nginx path contains unsupported characters: {value}")
+    return value
+
+
+def render_split_config_updates(targets):
+    changes = {}
+    allowed_roots = CONFIG.get("discovery", {}).get(
+        "allowed_config_roots",
+        ["/etc/nginx"],
+    )
+    for target in targets:
+        paths = target["paths"]
+        certificate_literal = nginx_path_literal(paths["certificate_path"])
+        key_literal = nginx_path_literal(paths["key_path"])
+        for server in target["servers"]:
+            binding = server["binding"]
+            source_value = binding.get("config_file")
+            expected = binding.get("config_server_text")
+            if not source_value or expected is None:
+                raise RuntimeError(
+                    f"nginx -T did not identify an editable config file for {binding['domain']}"
+                )
+            source = Path(source_value)
+            if not source.is_absolute():
+                raise RuntimeError(f"nginx config path is not absolute: {source}")
+            try:
+                write_path = source.resolve(strict=True)
+            except FileNotFoundError as exc:
+                raise RuntimeError(f"nginx config file disappeared: {source}") from exc
+            if not path_is_allowed(source, allowed_roots) or not path_is_allowed(
+                write_path,
+                allowed_roots,
+            ):
+                raise RuntimeError(f"nginx config path is outside allowed roots: {source}")
+            key = str(write_path)
+            entry = changes.setdefault(
+                key,
+                {
+                    "path": write_path,
+                    "content": write_path.read_text(),
+                    "replacements": [],
+                },
+            )
+            positions = [
+                match.start()
+                for match in re.finditer(re.escape(expected), entry["content"])
+            ]
+            if len(positions) != 1:
+                raise RuntimeError(
+                    f"nginx server block changed or is not unique in {source}; rerun discovery"
+                )
+            base = positions[0]
+            entry["replacements"].extend(
+                [
+                    (
+                        base + int(binding["certificate_directive_start"]),
+                        base + int(binding["certificate_directive_end"]),
+                        f"ssl_certificate {certificate_literal};",
+                    ),
+                    (
+                        base + int(binding["key_directive_start"]),
+                        base + int(binding["key_directive_end"]),
+                        f"ssl_certificate_key {key_literal};",
+                    ),
+                ]
+            )
+
+    rendered = {}
+    for entry in changes.values():
+        content = entry["content"]
+        replacements = sorted(entry["replacements"], reverse=True)
+        previous_start = len(content) + 1
+        for start, end, replacement in replacements:
+            if not 0 <= start < end <= len(content) or end > previous_start:
+                raise RuntimeError(f"Overlapping or invalid nginx edit in {entry['path']}")
+            content = content[:start] + replacement + content[end:]
+            previous_start = start
+        rendered[str(entry["path"])] = content
+    return rendered
+
+
+def create_file_set_backup(bindings, paths):
+    root = Path(CONFIG.get("paths", {}).get("backup_root", "/opt/certm-agent/bkup"))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = root / group_id(bindings) / f"{stamp}-config-split"
+    suffix = 0
+    while target.exists():
+        suffix += 1
+        target = root / group_id(bindings) / f"{stamp}-config-split-{suffix}"
+    target.mkdir(parents=True, exist_ok=False)
+    manifest = []
+    for index, value in enumerate(sorted({str(Path(item)) for item in paths}), start=1):
+        path = Path(value)
+        record = {
+            "path": str(path),
+            "backup": None,
+        }
+        if path.exists():
+            destination = target / f"{index:03d}-{path.name}"
+            shutil.copy2(path, destination)
+            record["backup"] = str(destination)
+        manifest.append(record)
+    atomic_write(target / "manifest.json", json.dumps(manifest, indent=2) + "\n", 0o600)
+    return target, manifest
+
+
+def restore_file_set(manifest):
+    restored = []
+    for record in manifest:
+        path = Path(record["path"])
+        backup = record.get("backup")
+        if backup:
+            atomic_write(path, Path(backup).read_bytes())
+        else:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        restored.append(path)
+    restore_selinux_context(restored)
+
+
+def binding_with_managed_paths(binding, paths):
+    updated = dict(binding)
+    updated.update(paths)
+    updated["binding_id"] = make_binding_id(
+        updated["domain"],
+        int(updated["port"]),
+        updated["certificate_path"],
+        updated["key_path"],
+    )
+    return updated
+
+
 def nginx_test_reload():
     run(["nginx", "-t"])
     unit = str(CONFIG.get("service", {}).get("systemd_unit", "nginx"))
@@ -994,6 +1363,140 @@ def deploy_group(bindings, desired, token, machine_id, dry_run=False):
         raise RuntimeError(f"Deployment failed: {failure}. {rollback_text}")
 
 
+def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=False):
+    targets, untouched = split_plan(bindings, desired_values)
+    if not targets:
+        return False
+
+    for target in targets:
+        domains = sorted({binding["domain"] for binding in target["bindings"]})
+        paths = target["paths"]
+        log(
+            f"{'DRY RUN would split' if dry_run else 'Splitting'} nginx config for "
+            f"{', '.join(domains)} -> {paths['certificate_path']}"
+        )
+    if untouched:
+        domains = sorted({binding["domain"] for binding in untouched})
+        log(
+            "No CertM assignment for "
+            + ", ".join(domains)
+            + "; their current nginx paths will remain unchanged"
+        )
+    if dry_run:
+        return False
+
+    deployments = []
+    manifest = None
+    local_changes_started = False
+    try:
+        for target in targets:
+            representative = target["bindings"][0]
+            response = api_request(
+                "GET",
+                "/cert/download",
+                token,
+                machine_id,
+                query={
+                    "domain": representative["domain"],
+                    "service": "nginx",
+                    "port": int(representative["port"]),
+                },
+            )
+            domains = sorted({binding["domain"] for binding in target["bindings"]})
+            package = decode_package(response, target["desired"], domains)
+            deployments.append(
+                {
+                    "target": target,
+                    "package": package,
+                    "bindings": [
+                        binding_with_managed_paths(binding, target["paths"])
+                        for binding in target["bindings"]
+                    ],
+                }
+            )
+
+        config_updates = render_split_config_updates(targets)
+        changed_paths = list(config_updates)
+        for deployment in deployments:
+            paths = deployment["target"]["paths"]
+            changed_paths.extend(
+                [paths["certificate_write_path"], paths["key_write_path"]]
+            )
+        _, manifest = create_file_set_backup(bindings, changed_paths)
+
+        local_changes_started = True
+        for deployment in deployments:
+            install_package([deployment["target"]["paths"]], deployment["package"])
+        for path, content in config_updates.items():
+            atomic_write(path, content)
+        restore_selinux_context(config_updates)
+        nginx_test_reload()
+
+        for deployment in deployments:
+            target = deployment["target"]
+            desired = target["desired"]
+            expected = normalize_fingerprint(desired.get("fingerprint_sha256"))
+            installed = fingerprint_file(target["paths"]["certificate_write_path"])
+            if installed != expected:
+                raise RuntimeError("Installed fingerprint does not match desired certificate")
+            served_values = [
+                verify_served(binding, expected)
+                for binding in deployment["bindings"]
+            ]
+            deployment["installed"] = installed
+            deployment["served"] = served_values[-1]
+
+        for deployment in deployments:
+            target = deployment["target"]
+            package = deployment["package"]
+            domains = sorted({binding["domain"] for binding in deployment["bindings"]})
+            report = report_deployment(
+                token,
+                machine_id,
+                package["deployment_id"],
+                "SUCCESS",
+                installed=deployment["installed"],
+                served=deployment["served"],
+                message=(
+                    "Certificate installed, nginx config split, nginx reloaded and "
+                    f"{len(deployment['bindings'])} binding(s) verified"
+                ),
+            )
+            if report.get("status") != "ok":
+                raise RuntimeError(f"CertM rejected SUCCESS report: {report}")
+            expected = normalize_fingerprint(target["desired"].get("fingerprint_sha256"))
+            for binding in deployment["bindings"]:
+                save_state(binding, target["desired"], expected)
+            log(
+                "CERTIFICATE UPDATE SUCCESSFUL: "
+                f"{target['desired']['deployment_revision']} for {', '.join(domains)}"
+            )
+        return True
+    except Exception as exc:
+        failure = str(exc)
+        if local_changes_started and manifest is not None:
+            try:
+                restore_file_set(manifest)
+                nginx_test_reload()
+                rollback_text = "Config and certificate rollback completed successfully"
+            except Exception as rollback_exc:
+                rollback_text = f"Rollback failed: {rollback_exc}"
+        else:
+            rollback_text = "No local changes were made"
+        for deployment in deployments:
+            try:
+                report_deployment(
+                    token,
+                    machine_id,
+                    deployment["package"]["deployment_id"],
+                    "FAILED",
+                    message=f"{failure}. {rollback_text}",
+                )
+            except Exception as report_exc:
+                warn(f"Unable to report failed deployment: {report_exc}")
+        raise RuntimeError(f"Split deployment failed: {failure}. {rollback_text}")
+
+
 def read_active_identity():
     token, machine_id = load_identity()
     identity = api_request("GET", "/client/preflight", token, machine_id)
@@ -1081,25 +1584,26 @@ def renew(dry_run=False):
                     f"{', '.join(domains)}; keeping current files"
                 )
                 continue
-            if len(present) != len(group):
-                raise RuntimeError(
-                    "Shared nginx certificate paths include domains without a CertM assignment: "
-                    + ", ".join(domains)
-                )
             identities = {desired_identity(value) for value in present}
-            if len(identities) != 1:
-                raise RuntimeError(
-                    "Shared nginx certificate paths resolve to different desired certificates: "
-                    + ", ".join(domains)
+            if len(present) == len(group) and len(identities) == 1:
+                changed_now = deploy_group(group, present[0], token, machine_id, dry_run)
+            else:
+                changed_now = deploy_split_group(
+                    group,
+                    desired_values,
+                    token,
+                    machine_id,
+                    dry_run,
                 )
-            if deploy_group(group, present[0], token, machine_id, dry_run):
+            if changed_now:
                 changed += 1
         except Exception as exc:
             errors.append(str(exc))
             log(f"ERROR {exc}", logging.ERROR)
 
     try:
-        push_inventory(bindings, token, machine_id)
+        post_bindings = discover_bindings() if changed else bindings
+        push_inventory(post_bindings, token, machine_id)
     except Exception as exc:
         warn(f"Post-renew inventory failed: {exc}")
     if errors:

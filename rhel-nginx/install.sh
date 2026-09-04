@@ -11,6 +11,7 @@ fi
 install -d -m 0750 /opt/certm-agent
 install -d -m 0700 /opt/certm-agent/bkup
 install -d -m 0750 /etc/certm
+install -d -m 0750 /etc/certm/live
 install -d -m 0750 /var/log/certm
 install -d -m 0700 /var/lib/certm/bindings
 
@@ -57,6 +58,7 @@ discovery = config.get('discovery')
 if not isinstance(discovery, dict):
     discovery = {}
 discovery.setdefault('max_bindings', 1000)
+discovery.setdefault('allowed_config_roots', ['/etc/nginx'])
 if not discovery.get('allowed_certificate_roots'):
     discovery['allowed_certificate_roots'] = [
         '/etc/certm',
@@ -66,6 +68,11 @@ if not discovery.get('allowed_certificate_roots'):
         '/opt/certm-agent/live',
     ]
 config['discovery'] = discovery
+paths = config.get('paths')
+if not isinstance(paths, dict):
+    paths = {}
+paths.setdefault('managed_certificate_root', '/etc/certm/live')
+config['paths'] = paths
 path.write_text(json.dumps(config, indent=2) + '\n')
 path.chmod(0o600)
 PY
@@ -78,6 +85,6 @@ install -m 0644 "${BASE_DIR}/systemd/certm-agent.timer" /etc/systemd/system/cert
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.1 installed."
+echo "CertM Agent 1.0.0-rc.2 installed."
 echo "Discover: /opt/certm-agent/certm-agent.py discover"
 echo "Preflight: /opt/certm-agent/certm-agent.py preflight"

@@ -105,6 +105,24 @@ server {
             "ssl_certificate /etc/nginx/ssl/shared/fullchain.pem;",
         )
 
+    def test_public_discovery_output_hides_config_edit_metadata(self):
+        configuration = r"""# configuration file /etc/nginx/conf.d/site.conf:
+server {
+    listen 443 ssl;
+    server_name public.pmr.vn;
+    ssl_certificate /etc/nginx/ssl/public/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/public/privkey.pem;
+}
+"""
+        bindings, _ = self.discover(configuration)
+        public = agent.public_binding(bindings[0])
+
+        self.assertEqual(public["domain"], "public.pmr.vn")
+        self.assertEqual(public["certificate_path"], "/etc/nginx/ssl/public/fullchain.pem")
+        self.assertNotIn("config_server_text", public)
+        self.assertNotIn("config_file", public)
+        self.assertFalse(any("directive" in key for key in public))
+
     def test_rejects_duplicate_domain_and_port_with_different_files(self):
         configuration = r"""
         server {

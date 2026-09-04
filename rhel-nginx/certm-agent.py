@@ -1136,6 +1136,24 @@ def nginx_path_literal(path):
     return value
 
 
+def nginx_directive_replacement(binding, start_key, end_key, replacement):
+    server_text = binding["config_server_text"]
+    start = int(binding[start_key])
+    end = int(binding[end_key])
+    line_end = server_text.find("\n", end)
+    if line_end < 0:
+        line_end = len(server_text)
+    trailing = server_text[end:line_end]
+    if re.fullmatch(
+        r"[ \t]*#\s*managed\s+by\s+Certbot[ \t]*",
+        trailing,
+        flags=re.IGNORECASE,
+    ):
+        end = line_end
+        replacement += " # managed by CertM"
+    return start, end, replacement
+
+
 def render_split_config_updates(targets):
     changes = {}
     allowed_roots = CONFIG.get("discovery", {}).get(
@@ -1184,17 +1202,29 @@ def render_split_config_updates(targets):
                     f"nginx server block changed or is not unique in {source}; rerun discovery"
                 )
             base = positions[0]
+            certificate_edit = nginx_directive_replacement(
+                binding,
+                "certificate_directive_start",
+                "certificate_directive_end",
+                f"ssl_certificate {certificate_literal};",
+            )
+            key_edit = nginx_directive_replacement(
+                binding,
+                "key_directive_start",
+                "key_directive_end",
+                f"ssl_certificate_key {key_literal};",
+            )
             entry["replacements"].extend(
                 [
                     (
-                        base + int(binding["certificate_directive_start"]),
-                        base + int(binding["certificate_directive_end"]),
-                        f"ssl_certificate {certificate_literal};",
+                        base + certificate_edit[0],
+                        base + certificate_edit[1],
+                        certificate_edit[2],
                     ),
                     (
-                        base + int(binding["key_directive_start"]),
-                        base + int(binding["key_directive_end"]),
-                        f"ssl_certificate_key {key_literal};",
+                        base + key_edit[0],
+                        base + key_edit[1],
+                        key_edit[2],
                     ),
                 ]
             )

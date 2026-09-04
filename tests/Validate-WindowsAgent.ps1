@@ -12,6 +12,7 @@ $configPath = Join-Path $repositoryRoot 'windows\config.example.json'
 
 $agent = Get-Content -LiteralPath $agentPath -Raw -Encoding UTF8
 $installer = Get-Content -LiteralPath $installerPath -Raw -Encoding UTF8
+$uninstaller = Get-Content -LiteralPath (Join-Path $repositoryRoot 'windows\Uninstall-CertMAgent.ps1') -Raw -Encoding UTF8
 $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
 Assert-True ($config.config_version -eq 3) 'Windows example config must use config_version=3.'
@@ -23,11 +24,21 @@ Assert-True ($agent -notmatch 'Test-DomainAllowed\s+\$binding\.domain') `
     'The IIS deployment loop must evaluate every discovered hostname binding.'
 Assert-True ($installer -notmatch '\[string\[\]\]\$ManagedDomains') `
     'The IIS installer must not accept a static ManagedDomains list.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.1'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.2'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match "ValidateSet\('Run', 'Discover', 'Inventory', 'DryRun'\)") `
     'The IIS agent must expose safe discovery and dry-run modes.'
 Assert-True ($installer -match 'Existing DPAPI-protected client identity preserved') `
     'The IIS upgrade path must preserve the existing client identity.'
+Assert-True ($agent -match "ConfigPath\s*=\s*'C:\\CertM\\config\.json'") `
+    'The IIS agent configuration must default to C:\CertM\config.json.'
+Assert-True ($agent -match "CertMRoot\s*=\s*'C:\\CertM'") `
+    'The IIS agent runtime root must be C:\CertM.'
+Assert-True ($installer -match '\$root\s*=\s*''C:\\CertM''') `
+    'The IIS installer root must be C:\CertM.'
+Assert-True ($uninstaller -match '\$root\s*=\s*''C:\\CertM''') `
+    'The IIS uninstaller root must be C:\CertM.'
+Assert-True (($agent + $installer + $uninstaller) -notmatch 'ProgramData') `
+    'Windows agent scripts must not use the obsolete ProgramData installation root.'
 
 Write-Host 'Windows agent contract validation passed.'

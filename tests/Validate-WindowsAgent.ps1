@@ -24,6 +24,10 @@ Assert-True ($agent -notmatch 'Test-DomainAllowed\s+\$binding\.domain') `
     'The IIS deployment loop must evaluate every discovered hostname binding.'
 Assert-True ($installer -notmatch '\[string\[\]\]\$ManagedDomains') `
     'The IIS installer must not accept a static ManagedDomains list.'
+Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
+    'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
+Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
+    'The IIS installer must reject only an empty bootstrap enrollment key.'
 Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.2'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match "ValidateSet\('Run', 'Discover', 'Inventory', 'DryRun'\)") `

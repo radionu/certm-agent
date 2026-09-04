@@ -344,7 +344,7 @@ class NginxConfigSplitTest(unittest.TestCase):
             "fingerprint_sha256": fingerprint,
         }
 
-    def fixture(self, root, same_server=False):
+    def fixture(self, root, same_server=False, certbot_comments=False):
         root = Path(root)
         config_path = root / "nginx" / "conf.d" / "sites.conf"
         config_path.parent.mkdir(parents=True)
@@ -352,26 +352,27 @@ class NginxConfigSplitTest(unittest.TestCase):
         shared.mkdir(parents=True)
         (shared / "fullchain.pem").write_text("old certificate")
         (shared / "privkey.pem").write_text("old key")
+        comment = " # managed by Certbot" if certbot_comments else ""
         if same_server:
             content = f"""server {{
     listen 443 ssl;
     server_name a.pmr.vn b.pmr.vn;
-    ssl_certificate {shared / 'fullchain.pem'};
-    ssl_certificate_key {shared / 'privkey.pem'};
+    ssl_certificate {shared / 'fullchain.pem'};{comment}
+    ssl_certificate_key {shared / 'privkey.pem'};{comment}
 }}
 """
         else:
             content = f"""server {{
     listen 443 ssl;
     server_name a.pmr.vn;
-    ssl_certificate {shared / 'fullchain.pem'};
-    ssl_certificate_key {shared / 'privkey.pem'};
+    ssl_certificate {shared / 'fullchain.pem'};{comment}
+    ssl_certificate_key {shared / 'privkey.pem'};{comment}
 }}
 server {{
     listen 443 ssl;
     server_name b.pmr.vn;
-    ssl_certificate {shared / 'fullchain.pem'};
-    ssl_certificate_key {shared / 'privkey.pem'};
+    ssl_certificate {shared / 'fullchain.pem'};{comment}
+    ssl_certificate_key {shared / 'privkey.pem'};{comment}
 }}
 """
         config_path.write_text(content)
@@ -451,6 +452,25 @@ server {{
             self.assertIn("certificate-10/fullchain.pem", rendered)
             self.assertIn("certificate-11/fullchain.pem", rendered)
             self.assertNotIn("ssl/shared/fullchain.pem", rendered)
+
+    def test_render_replaces_stale_certbot_ownership_comments(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path, _, bindings = self.fixture(
+                temporary,
+                certbot_comments=True,
+            )
+            old = self.configure(temporary)
+            try:
+                targets, _ = agent.split_plan(
+                    bindings,
+                    [self.desired(10, "a" * 64), self.desired(11, "b" * 64)],
+                )
+                rendered = agent.render_split_config_updates(targets)[str(config_path)]
+            finally:
+                agent.CONFIG = old
+
+            self.assertNotIn("managed by Certbot", rendered)
+            self.assertEqual(rendered.count("managed by CertM"), 4)
 
     def test_dry_run_validates_config_edits_without_downloading_or_writing(self):
         with tempfile.TemporaryDirectory() as temporary:

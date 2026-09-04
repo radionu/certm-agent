@@ -1315,8 +1315,12 @@ def deploy_group(bindings, desired, token, machine_id, dry_run=False):
         try:
             for binding in bindings:
                 verify_served(binding, expected)
-                save_state(binding, desired, expected)
-            note = "state refreshed" if not states_current else "already current"
+            if dry_run:
+                note = "already current" if states_current else "would refresh state"
+            else:
+                for binding in bindings:
+                    save_state(binding, desired, expected)
+                note = "state refreshed" if not states_current else "already current"
             log(f"Group {group_id(bindings)} {note} and verified for {', '.join(domains)}")
             return False
         except Exception as exc:

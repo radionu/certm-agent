@@ -1382,7 +1382,12 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
             + ", ".join(domains)
             + "; their current nginx paths will remain unchanged"
         )
+    config_updates = render_split_config_updates(targets)
     if dry_run:
+        log(
+            "DRY RUN validated nginx config edits for: "
+            + ", ".join(sorted(config_updates))
+        )
         return False
 
     deployments = []
@@ -1415,7 +1420,6 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
                 }
             )
 
-        config_updates = render_split_config_updates(targets)
         changed_paths = list(config_updates)
         for deployment in deployments:
             paths = deployment["target"]["paths"]

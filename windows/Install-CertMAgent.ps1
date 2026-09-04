@@ -31,8 +31,8 @@ if (-not $existingConfiguration -or $Force) {
     if (-not $ApiBase.TrimEnd('/').EndsWith('/api/v2', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'ApiBase must end with /api/v2.'
     }
-    if ($EnrollmentToken.Length -lt 32) {
-        throw 'EnrollmentToken is required for a new installation or intentional re-enrollment.'
+    if ($EnrollmentToken.Length -eq 0) {
+        throw 'A non-empty EnrollmentToken is required for a new installation or intentional re-enrollment.'
     }
 }
 

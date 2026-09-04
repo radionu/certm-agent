@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$ConfigPath = "$env:ProgramData\CertM\config.json",
+    [string]$ConfigPath = 'C:\CertM\config.json',
     [ValidateSet('Run', 'Discover', 'Inventory', 'DryRun')][string]$Mode = 'Run'
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.1'
+$script:AgentVersion = '1.0.0-rc.2'
+$script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 
 [void][Reflection.Assembly]::LoadWithPartialName('System.Security')
@@ -15,7 +16,7 @@ $script:Mutex = $null
 function Write-CertMLog {
     param([string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO')
 
-    $logDirectory = Join-Path $env:ProgramData 'CertM\logs'
+    $logDirectory = Join-Path $script:CertMRoot 'logs'
     if (-not (Test-Path -LiteralPath $logDirectory)) {
         New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
     }
@@ -326,7 +327,7 @@ function Install-DeploymentGroup {
         throw 'CertM response does not contain a PFX package. Update the CertM server first.'
     }
 
-    $stagingDirectory = Join-Path $env:ProgramData 'CertM\staging'
+    $stagingDirectory = Join-Path $script:CertMRoot 'staging'
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
     $pfxPath = Join-Path $stagingDirectory ("{0}-{1}.pfx" -f $desired.deployment_revision, [Guid]::NewGuid().ToString('N'))
     $oldBindings = @()
@@ -470,7 +471,7 @@ try {
         exit 0
     }
 
-    $statePath = Join-Path $env:ProgramData 'CertM\state.json'
+    $statePath = Join-Path $script:CertMRoot 'state.json'
     $state = Read-JsonFile $statePath ([pscustomobject]@{ deployments = @{} })
     if (-not $state.deployments) { $state | Add-Member -NotePropertyName deployments -NotePropertyValue @{} -Force }
     elseif ($state.deployments -isnot [Collections.IDictionary]) {

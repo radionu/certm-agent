@@ -15,7 +15,7 @@ $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this installer from an elevated PowerShell window.'
 }
-$root = Join-Path $env:ProgramData 'CertM'
+$root = 'C:\CertM'
 $bin = Join-Path $root 'bin'
 $configPath = Join-Path $root 'config.json'
 $sourceAgent = Join-Path $PSScriptRoot 'CertM.Agent.ps1'
@@ -81,7 +81,7 @@ $taskCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypas
 & schtasks.exe /Create /TN $taskName /TR $taskCommand /SC MINUTE /MO $IntervalMinutes /RU SYSTEM /RL HIGHEST /F | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not register the CertM scheduled task.' }
 
-Write-Host "CertM IIS Agent 1.0.0-rc.1 installed."
+Write-Host "CertM IIS Agent 1.0.0-rc.2 installed."
 Write-Host "Configuration: $configPath"
 Write-Host "Task: $taskName (every $IntervalMinutes minutes)"
 

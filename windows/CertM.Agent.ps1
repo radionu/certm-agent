@@ -1,11 +1,12 @@
 [CmdletBinding()]
 param(
-    [string]$ConfigPath = "$env:ProgramData\CertM\config.json"
+    [string]$ConfigPath = "$env:ProgramData\CertM\config.json",
+    [ValidateSet('Run', 'Discover', 'Inventory', 'DryRun')][string]$Mode = 'Run'
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '0.1.0'
+$script:AgentVersion = '1.0.0-rc.1'
 $script:Mutex = $null
 
 [void][Reflection.Assembly]::LoadWithPartialName('System.Security')
@@ -184,25 +185,6 @@ function Get-IisHttpsBindings {
         }
     }
     return $results
-}
-
-function Test-DomainAllowed {
-    param([string]$Domain)
-    $patterns = @($script:Config.managed_domains)
-    if ($patterns.Count -eq 0) { return $true }
-
-    foreach ($rawPattern in $patterns) {
-        $pattern = $rawPattern.ToString().Trim().TrimEnd('.').ToLowerInvariant()
-        if ($pattern -eq $Domain) { return $true }
-        if ($pattern.StartsWith('*.')) {
-            $base = $pattern.Substring(2)
-            if ($Domain.EndsWith(".$base")) {
-                $prefix = $Domain.Substring(0, $Domain.Length - $base.Length - 1)
-                if ($prefix -and -not $prefix.Contains('.')) { return $true }
-            }
-        }
-    }
-    return $false
 }
 
 function Send-Inventory {
@@ -417,11 +399,36 @@ try {
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Configuration file not found: $ConfigPath" }
     $script:Config = Read-JsonFile $ConfigPath $null
-    if ([int]$script:Config.config_version -ne 2) { throw 'CertM IIS Agent requires config_version=2.' }
+    $configVersion = [int]$script:Config.config_version
+    if ($configVersion -notin @(2, 3)) { throw 'CertM IIS Agent requires config_version=3.' }
+    $configChanged = $false
+    if ($configVersion -eq 2) {
+        $script:Config.config_version = 3
+        $configChanged = $true
+    }
+    if ($script:Config.PSObject.Properties.Name -contains 'managed_domains') {
+        $script:Config.PSObject.Properties.Remove('managed_domains')
+        $configChanged = $true
+    }
+    if ($configChanged) {
+        Write-JsonFileAtomic $ConfigPath $script:Config
+        Write-CertMLog 'Configuration migrated to config_version=3; IIS domains are discovered dynamically.'
+    }
     if (-not $script:Config.api_base.TrimEnd('/').EndsWith('/api/v2', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'api_base must end with /api/v2.'
     }
     $machineId = Get-MachineId
+
+    $bindings = @(Get-IisHttpsBindings)
+    if ($Mode -eq 'Discover') {
+        $bindings |
+            Select-Object site_name, domain, ip_address, port, protocol, binding_id, `
+                uses_central_certificate_store, store_name, thumbprint, `
+                fingerprint_sha256, not_after |
+            ConvertTo-Json -Depth 6
+        Write-CertMLog "Discovery completed; found $($bindings.Count) IIS HTTPS hostname binding(s)."
+        exit 0
+    }
 
     $clientToken = Unprotect-LocalMachineSecret $script:Config.client_token_protected
     if (-not $clientToken) {
@@ -457,8 +464,11 @@ try {
     $status = Invoke-CertMApi GET '/client/status' $clientToken $machineId $null
     if ($status.status -ne 'active') { throw "Client is not ACTIVE: $($status.status)" }
 
-    $bindings = @(Get-IisHttpsBindings)
     Send-Inventory $bindings $clientToken $machineId
+    if ($Mode -eq 'Inventory') {
+        Write-CertMLog "Inventory-only run completed; submitted $($bindings.Count) binding(s)."
+        exit 0
+    }
 
     $statePath = Join-Path $env:ProgramData 'CertM\state.json'
     $state = Read-JsonFile $statePath ([pscustomobject]@{ deployments = @{} })
@@ -471,7 +481,6 @@ try {
 
     $plans = @()
     foreach ($binding in $bindings) {
-        if (-not (Test-DomainAllowed $binding.domain)) { continue }
         if ($binding.uses_central_certificate_store) {
             Write-CertMLog "Skip IIS Central Certificate Store binding: $($binding.binding_id)" 'WARN'
             continue
@@ -490,11 +499,21 @@ try {
     }
 
     foreach ($group in ($plans | Group-Object { "$($_.desired.certificate_id):$($_.desired.deployment_revision)" })) {
+        if ($Mode -eq 'DryRun') {
+            $domains = ($group.Group | ForEach-Object { $_.binding.domain }) -join ', '
+            Write-CertMLog "DRY RUN would install $($group.Group[0].desired.deployment_revision) for $domains"
+            continue
+        }
         Install-DeploymentGroup @($group.Group) $clientToken $machineId $state
         Write-JsonFileAtomic $statePath $state
     }
 
-    if ($plans.Count -eq 0) { Write-CertMLog "Inventory sent; $($bindings.Count) IIS HTTPS binding(s) are current." }
+    if ($plans.Count -eq 0) {
+        Write-CertMLog "Inventory sent; $($bindings.Count) IIS HTTPS binding(s) are current."
+    }
+    elseif ($Mode -eq 'DryRun') {
+        Write-CertMLog "Dry run completed; planned $($plans.Count) IIS binding update(s)."
+    }
 }
 catch {
     try { Write-CertMLog $_.Exception.ToString() 'ERROR' } catch { }

@@ -8,6 +8,19 @@ permissions:
   contents: read
 
 jobs:
+  linux-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python and JSON syntax
+        run: |
+          python3 -m py_compile rhel-nginx/certm-agent.py
+          python3 -m json.tool rhel-nginx/agent.json.example >/dev/null
+          python3 -m json.tool windows/config.example.json >/dev/null
+          bash -n rhel-nginx/install.sh
+      - name: Run nginx discovery and safety tests
+        run: python3 -m unittest discover -s tests -v
+
   powershell-syntax:
     runs-on: windows-latest
     steps:
@@ -32,3 +45,6 @@ jobs:
             }
           }
           if ($failed) { exit 1 }
+      - name: Validate Windows agent contract
+        shell: powershell
+        run: .\tests\Validate-WindowsAgent.ps1

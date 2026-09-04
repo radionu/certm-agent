@@ -2,7 +2,7 @@
 
 Public pull-based deployment agents for CertM.
 
-Current implementations:
+Current release candidate implementations:
 
 - `rhel-nginx/` — native API v2 agent for RHEL-family Linux + nginx.
 - `windows/` — native API v2 agent for Windows Server + IIS.
@@ -17,11 +17,11 @@ cd certm-agent/rhel-nginx
 sudo ./install.sh
 ```
 
-See `rhel-nginx/README.md` before enabling the systemd timer.
+The nginx agent discovers current HTTPS vhosts from `nginx -T` on every run. Its configuration contains safety roots, API identity, logging, and timeout settings, but no domain or binding list. See `rhel-nginx/README.md` before enabling the systemd timer.
 
 ## Windows/IIS
 
-The Windows agent is an initial operational release. It:
+The Windows agent:
 
 - creates a stable identity from the Windows `MachineGuid`;
 - uses the API v2 preflight, enrollment, approval, desired/download, inventory, and deployment-report flow;
@@ -53,11 +53,28 @@ Download the three PowerShell files in `windows/` to one directory, then run:
 Set-ExecutionPolicy -Scope Process Bypass
 .\Install-CertMAgent.ps1 `
   -ApiBase 'https://certm.pmr.vn/api/v2' `
-  -EnrollmentToken 'PASTE_ENROLLMENT_KEY' `
-  -ManagedDomains '*.pmr.vn'
+  -EnrollmentToken 'PASTE_ENROLLMENT_KEY'
 ```
 
-An empty `ManagedDomains` list allows every IIS HTTPS binding with a host name to be evaluated. CertM returns a deployment only when the certificate assigned to the client covers that domain.
+Every IIS HTTPS binding with a host name is evaluated dynamically on each run. There is no static domain allowlist in the agent configuration. CertM returns a deployment only when a certificate assigned to that client covers the binding domain.
+
+To upgrade an existing installation while preserving its DPAPI-protected client identity, run the installer without an enrollment token:
+
+```powershell
+.\Install-CertMAgent.ps1
+```
+
+Inspect current IIS bindings without contacting CertM or changing certificates:
+
+```powershell
+& 'C:\ProgramData\CertM\bin\CertM.Agent.ps1' -Mode Discover
+```
+
+After client approval, evaluate desired changes without importing a PFX or changing IIS:
+
+```powershell
+& 'C:\ProgramData\CertM\bin\CertM.Agent.ps1' -Mode DryRun
+```
 
 The installer creates:
 

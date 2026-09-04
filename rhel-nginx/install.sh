@@ -14,9 +14,6 @@ install -d -m 0750 /etc/certm
 install -d -m 0750 /var/log/certm
 install -d -m 0700 /var/lib/certm/bindings
 
-install -m 0640 "${BASE_DIR}/certm-agent.py" /opt/certm-agent/certm-agent-core.py
-install -m 0750 "${BASE_DIR}/certm-agent-0.4.1.py" /opt/certm-agent/certm-agent.py
-
 if [[ ! -f /etc/certm/agent.json ]]; then
   install -m 0600 "${BASE_DIR}/agent.json.example" /etc/certm/agent.json
   TOKEN=""
@@ -37,13 +34,50 @@ p.chmod(0o600)
 PY
 else
   echo "/etc/certm/agent.json already exists; keeping existing configuration."
-  echo "Agent 0.4.1 requires config_version=2 and api_base ending in /api/v2."
 fi
+
+python3 - <<'PY'
+import json
+import shutil
+from pathlib import Path
+
+path = Path('/etc/certm/agent.json')
+config = json.loads(path.read_text())
+version = int(config.get('config_version', 0))
+if version not in (2, 3):
+    raise SystemExit(f'Unsupported CertM config_version={version}')
+if version == 2:
+    backup = Path('/etc/certm/agent.json.pre-v3.bak')
+    if not backup.exists():
+        shutil.copy2(path, backup)
+        backup.chmod(0o600)
+config['config_version'] = 3
+config.pop('management', None)
+discovery = config.get('discovery')
+if not isinstance(discovery, dict):
+    discovery = {}
+discovery.setdefault('max_bindings', 1000)
+if not discovery.get('allowed_certificate_roots'):
+    discovery['allowed_certificate_roots'] = [
+        '/etc/certm',
+        '/etc/nginx',
+        '/etc/pki/tls',
+        '/etc/letsencrypt',
+        '/opt/certm-agent/live',
+    ]
+config['discovery'] = discovery
+path.write_text(json.dumps(config, indent=2) + '\n')
+path.chmod(0o600)
+PY
+
+install -m 0750 "${BASE_DIR}/certm-agent.py" /opt/certm-agent/certm-agent.py
+rm -f /opt/certm-agent/certm-agent-core.py
 
 install -m 0644 "${BASE_DIR}/systemd/certm-agent.service" /etc/systemd/system/certm-agent.service
 install -m 0644 "${BASE_DIR}/systemd/certm-agent.timer" /etc/systemd/system/certm-agent.timer
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 0.4.1 installed."
-echo "Run: /opt/certm-agent/certm-agent.py preflight"
+echo "CertM Agent 1.0.0-rc.1 installed."
+echo "Discover: /opt/certm-agent/certm-agent.py discover"
+echo "Preflight: /opt/certm-agent/certm-agent.py preflight"

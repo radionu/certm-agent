@@ -67,28 +67,29 @@ To upgrade an existing installation while preserving its DPAPI-protected client 
 Inspect current IIS bindings without contacting CertM or changing certificates:
 
 ```powershell
-& 'C:\ProgramData\CertM\bin\CertM.Agent.ps1' -Mode Discover
+& 'C:\CertM\bin\CertM.Agent.ps1' -Mode Discover
 ```
 
 After client approval, evaluate desired changes without importing a PFX or changing IIS:
 
 ```powershell
-& 'C:\ProgramData\CertM\bin\CertM.Agent.ps1' -Mode DryRun
+& 'C:\CertM\bin\CertM.Agent.ps1' -Mode DryRun
 ```
 
 The installer creates:
 
 - task `CertM IIS Agent`, running as `SYSTEM` every 30 minutes;
-- program directory `C:\ProgramData\CertM\bin`;
-- protected configuration `C:\ProgramData\CertM\config.json`;
-- state file `C:\ProgramData\CertM\state.json` after the first deployment;
-- log file `C:\ProgramData\CertM\logs\agent.log`.
+- program directory `C:\CertM\bin`;
+- protected configuration `C:\CertM\config.json`;
+- state file `C:\CertM\state.json` after the first deployment;
+- log file `C:\CertM\logs\agent.log`;
+- temporary PFX staging directory `C:\CertM\staging`.
 
 After the initial run, approve the new client in the CertM dashboard. To retry immediately:
 
 ```powershell
 Start-ScheduledTask -TaskName 'CertM IIS Agent'
-Get-Content 'C:\ProgramData\CertM\logs\agent.log' -Tail 50
+Get-Content 'C:\CertM\logs\agent.log' -Tail 50
 ```
 
 ### Uninstall

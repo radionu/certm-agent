@@ -332,6 +332,38 @@ class NginxRenewPlanningTest(unittest.TestCase):
         self.assertTrue(deploy.call_args.args[-1])
         split.assert_not_called()
 
+    def test_current_certificate_dry_run_does_not_write_binding_state(self):
+        with mock.patch.object(
+            agent,
+            "fingerprint_file",
+            return_value=self.desired["fingerprint_sha256"],
+        ), mock.patch.object(
+            agent,
+            "load_state",
+            return_value={},
+        ), mock.patch.object(
+            agent,
+            "verify_served",
+            return_value=self.desired["fingerprint_sha256"],
+        ), mock.patch.object(
+            agent,
+            "save_state",
+        ) as save_state, mock.patch.object(
+            agent,
+            "api_request",
+        ) as request:
+            changed = agent.deploy_group(
+                self.bindings,
+                self.desired,
+                "token",
+                "machine",
+                dry_run=True,
+            )
+
+        self.assertFalse(changed)
+        save_state.assert_not_called()
+        request.assert_not_called()
+
 
 class NginxConfigSplitTest(unittest.TestCase):
     def desired(self, certificate_id, fingerprint):

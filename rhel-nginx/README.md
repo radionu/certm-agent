@@ -1,4 +1,4 @@
-# CertM nginx Agent 1.0.0-rc.1
+# CertM nginx Agent 1.0.0-rc.2
 
 Public pull-based API v2 agent for RHEL-family Linux and nginx.
 
@@ -17,14 +17,21 @@ IPv4 and IPv6 listeners for the same domain and port are deduplicated. A newly a
 
 For safety, the agent skips regex, wildcard, variable, and hostless `server_name` values; variable certificate paths; dual RSA/ECDSA certificate blocks; and paths outside `discovery.allowed_certificate_roots`.
 
-## Shared certificate paths
+## Shared certificate paths and profile separation
 
-Multiple domains may use the same nginx certificate/key paths. CertM replaces that pair only when every discovered domain sharing it:
+Multiple domains may initially use the same nginx certificate/key paths. When every domain sharing the paths resolves to the same CertM package, the agent can safely update that shared pair as one group.
 
-1. has an active certificate assignment; and
-2. resolves to the same certificate version and package revision.
+When separate nginx `server {}` blocks sharing the current paths resolve to different CertM profiles, the agent automatically:
 
-The downloaded certificate must cover every concrete domain in the group. Otherwise the files are not changed.
+1. downloads and validates every required package before changing nginx;
+2. writes each package below `paths.managed_certificate_root/certificate-<profile-id>/`;
+3. changes only the `ssl_certificate` and `ssl_certificate_key` directives in the affected server blocks;
+4. runs `nginx -t`, reloads nginx, and verifies each served SNI fingerprint;
+5. restores both config files and certificate files if any step fails.
+
+An unassigned server block remains on its current paths. If domains with different assignments are listed together in one `server_name` directive, the agent refuses the change because one nginx server block can use only one certificate pair. Split those names into separate server blocks first.
+
+Only config files below `discovery.allowed_config_roots` may be edited. The source block must still exactly match the last `nginx -T` result, preventing changes based on stale discovery data.
 
 ## Install or upgrade
 
@@ -71,7 +78,7 @@ sudo /opt/certm-agent/certm-agent.py renew
 
 ## Deployment safety
 
-Before modifying nginx, the agent validates API metadata, base64 encoding, certificate/private-key matching, fullchain order, and coverage for all domains sharing the target paths. It backs up the current files, writes atomically, restores SELinux contexts when `restorecon` is available, runs `nginx -t`, reloads nginx, and verifies the served SHA-256 fingerprint through SNI.
+Before modifying nginx, the agent validates API metadata, base64 encoding, certificate/private-key matching, fullchain order, and domain coverage. It backs up the current files and any config files involved in a profile split, writes atomically, preserves existing ownership and permissions, restores SELinux contexts when `restorecon` is available, runs `nginx -t`, reloads nginx, and verifies the served SHA-256 fingerprint through SNI.
 
 If validation, reload, or served-certificate verification fails, the previous complete certificate/key pair is restored and nginx is revalidated and reloaded.
 

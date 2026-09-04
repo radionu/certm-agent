@@ -2,7 +2,7 @@
 param([switch]$RemoveData)
 
 $ErrorActionPreference = 'Stop'
-$root = Join-Path $env:ProgramData 'CertM'
+$root = 'C:\CertM'
 
 & schtasks.exe /Delete /TN 'CertM IIS Agent' /F 2>$null | Out-Null
 if ($RemoveData -and (Test-Path -LiteralPath $root)) {

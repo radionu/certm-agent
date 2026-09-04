@@ -30,6 +30,14 @@ Assert-True ($agent -match "ValidateSet\('Run', 'Discover', 'Inventory', 'DryRun
     'The IIS agent must expose safe discovery and dry-run modes.'
 Assert-True ($installer -match 'Existing DPAPI-protected client identity preserved') `
     'The IIS upgrade path must preserve the existing client identity.'
+Assert-True ($installer -match '\[switch\]\$EnableTask') `
+    'The IIS installer must require an explicit switch to enable its scheduled task.'
+Assert-True ($installer -match '\[switch\]\$RunOnce') `
+    'The IIS installer must require an explicit switch for its initial agent run.'
+Assert-True ($installer -match 'schtasks\.exe /Change /TN \$taskName /DISABLE') `
+    'The IIS installer must disable the scheduled task during staged installation.'
+Assert-True ($installer -match 'if \(\$RunOnce\)') `
+    'The IIS installer must guard the initial agent execution with RunOnce.'
 Assert-True ($agent -match "ConfigPath\s*=\s*'C:\\CertM\\config\.json'") `
     'The IIS agent configuration must default to C:\CertM\config.json.'
 Assert-True ($agent -match "CertMRoot\s*=\s*'C:\\CertM'") `

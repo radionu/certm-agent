@@ -42,6 +42,10 @@ Assert-True ($installer -match 'schtasks\.exe /Change /TN \$taskName /DISABLE') 
     'The IIS installer must disable the scheduled task during staged installation.'
 Assert-True ($installer -match 'if \(\$RunOnce\)') `
     'The IIS installer must guard the initial agent execution with RunOnce.'
+$assemblyLoad = $installer.IndexOf('Add-Type -AssemblyName System.Security')
+$dpapiUse = $installer.IndexOf('[Security.Cryptography.ProtectedData]::Protect')
+Assert-True ($assemblyLoad -ge 0 -and $dpapiUse -gt $assemblyLoad) `
+    'The IIS installer must load System.Security before using DPAPI on Windows PowerShell 5.1.'
 Assert-True ($agent -match "ConfigPath\s*=\s*'C:\\CertM\\config\.json'") `
     'The IIS agent configuration must default to C:\CertM\config.json.'
 Assert-True ($agent -match "CertMRoot\s*=\s*'C:\\CertM'") `

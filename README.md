@@ -58,6 +58,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 The default installation is staged: it creates the scheduled task in a disabled state and does not run the agent. This prevents enrollment or certificate changes from racing ahead of administrator validation. `-RunOnce` and `-EnableTask` are explicit opt-ins for unattended deployments.
 
+The enrollment key is only a non-empty, administrator-rotatable bootstrap gate against unsolicited enrollment. It has no minimum length requirement and is not a long-lived client credential. A successful enrollment replaces it locally with a unique DPAPI-protected client token; rotating the enrollment key affects only future enrollments.
+
 Every IIS HTTPS binding with a host name is evaluated dynamically on each run. There is no static domain allowlist in the agent configuration. CertM returns a deployment only when a certificate assigned to that client covers the binding domain.
 
 To upgrade an existing installation while preserving its DPAPI-protected client identity, run the installer without an enrollment token:

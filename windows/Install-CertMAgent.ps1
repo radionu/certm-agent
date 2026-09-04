@@ -4,7 +4,9 @@ param(
     [string]$ApiBase = 'https://certm.pmr.vn/api/v2',
     [ValidateRange(5, 1440)][int]$IntervalMinutes = 30,
     [string]$VerifyConnectHost = '',
-    [switch]$Force
+    [switch]$Force,
+    [switch]$EnableTask,
+    [switch]$RunOnce
 )
 
 Set-StrictMode -Version 2.0
@@ -81,19 +83,34 @@ $taskCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypas
 & schtasks.exe /Create /TN $taskName /TR $taskCommand /SC MINUTE /MO $IntervalMinutes /RU SYSTEM /RL HIGHEST /F | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not register the CertM scheduled task.' }
 
+if (-not $EnableTask) {
+    & schtasks.exe /Change /TN $taskName /DISABLE | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not disable the CertM scheduled task for staged validation.' }
+}
+
 Write-Host "CertM IIS Agent 1.0.0-rc.2 installed."
 Write-Host "Configuration: $configPath"
-Write-Host "Task: $taskName (every $IntervalMinutes minutes)"
-
-& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $agentPath
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "The initial run failed. Review $root\logs\agent.log"
+if ($EnableTask) {
+    Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"
 }
 else {
-    if (-not $existingConfiguration -or $Force) {
-        Write-Host 'Initial enrollment completed. Approve the new client in CertM, then run the task again.'
+    Write-Host "Task: $taskName (disabled for staged validation)"
+}
+
+if ($RunOnce) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $agentPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "The requested initial run failed. Review $root\logs\agent.log"
     }
     else {
-        Write-Host 'Upgrade validation run completed with the existing client identity.'
+        if (-not $existingConfiguration -or $Force) {
+            Write-Host 'Initial enrollment completed. Approve the new client in CertM before enabling the task.'
+        }
+        else {
+            Write-Host 'Requested validation run completed with the existing client identity.'
+        }
     }
+}
+else {
+    Write-Host 'The agent was not run. Complete Discover, enrollment, DryRun, and a verified Run before enabling the task.'
 }

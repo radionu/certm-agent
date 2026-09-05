@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,37 @@ class NginxDiscoveryTest(unittest.TestCase):
             list(roots),
             1000,
         )
+
+    def test_log_timestamp_uses_fixed_utc_plus_seven_offset(self):
+        previous_config = agent.CONFIG
+        with tempfile.TemporaryDirectory() as temporary:
+            agent.CONFIG = {
+                "paths": {
+                    "log_file": str(Path(temporary) / "agent.log"),
+                },
+            }
+            try:
+                agent.setup_logging()
+                formatter = agent.LOGGER.handlers[0].formatter
+                record = logging.LogRecord(
+                    "certm-agent",
+                    logging.INFO,
+                    "",
+                    0,
+                    "test message",
+                    (),
+                    None,
+                )
+                record.created = 0
+                self.assertEqual(
+                    formatter.format(record),
+                    "1970-01-01T07:00:00+07:00 INFO test message",
+                )
+            finally:
+                for handler in agent.LOGGER.handlers:
+                    handler.close()
+                agent.LOGGER.handlers.clear()
+                agent.CONFIG = previous_config
 
     def test_discovers_level_three_and_level_four_domains(self):
         configuration = r"""

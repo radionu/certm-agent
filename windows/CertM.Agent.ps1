@@ -6,9 +6,10 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.4'
+$script:AgentVersion = '1.0.0-rc.5'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
+$script:LogTimeOffset = [TimeSpan]::FromHours(7)
 
 [void][Reflection.Assembly]::LoadWithPartialName('System.Security')
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -21,7 +22,10 @@ function Write-CertMLog {
         New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
     }
 
-    $line = '{0} [{1}] {2}' -f (Get-Date).ToUniversalTime().ToString('o'), $Level, $Message
+    $timestamp = [DateTimeOffset]::UtcNow.ToOffset(
+        $script:LogTimeOffset
+    ).ToString('o')
+    $line = '{0} [{1}] {2}' -f $timestamp, $Level, $Message
     Add-Content -LiteralPath (Join-Path $logDirectory 'agent.log') -Value $line -Encoding UTF8
 }
 

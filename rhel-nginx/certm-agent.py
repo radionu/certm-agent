@@ -20,12 +20,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.4"
+AGENT_VERSION = "1.0.0-rc.5"
+LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
 LOGGER = logging.getLogger("certm-agent")
 CONFIG = {}
@@ -151,10 +152,13 @@ def setup_logging():
     LOGGER.handlers.clear()
     handler = logging.FileHandler(log_file)
     formatter = logging.Formatter(
-        "%(asctime)sZ %(levelname)s %(message)s",
+        "%(asctime)s+07:00 %(levelname)s %(message)s",
         "%Y-%m-%dT%H:%M:%S",
     )
-    formatter.converter = time.gmtime
+    formatter.converter = lambda timestamp: datetime.fromtimestamp(
+        timestamp,
+        LOG_TIMEZONE,
+    ).timetuple()
     handler.setFormatter(formatter)
     LOGGER.addHandler(handler)
 

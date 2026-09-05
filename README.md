@@ -21,6 +21,8 @@ The nginx agent discovers current HTTPS vhosts from `nginx -T` on every run. Its
 
 Both agents support an optional `display_name` configuration value for a human-friendly server label. The real operating-system hostname is reported independently on every inventory run. Changing a hostname therefore does not require re-enrollment as long as the machine ID and client token remain valid.
 
+Agent log lines use the fixed Vietnam offset `UTC+07:00` and include `+07:00` in every timestamp. Protocol, certificate-validity, and state timestamps remain UTC.
+
 ## Windows/IIS
 
 The Windows agent:

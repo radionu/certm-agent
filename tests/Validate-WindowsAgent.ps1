@@ -36,8 +36,12 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.4'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.5'") `
     'The IIS agent release candidate version is missing.'
+Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
+    'The IIS log timestamp must use the fixed UTC+07:00 offset.'
+Assert-True ($agent -match '\[DateTimeOffset\]::UtcNow\.ToOffset') `
+    'The IIS logger must render timestamps through DateTimeOffset.'
 Assert-True ($agent -match "ValidateSet\('Run', 'Discover', 'Inventory', 'DryRun'\)") `
     'The IIS agent must expose safe discovery and dry-run modes.'
 Assert-True ($installer -match 'Existing DPAPI-protected client identity preserved') `

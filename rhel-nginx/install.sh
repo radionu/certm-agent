@@ -98,6 +98,6 @@ install -m 0644 "${BASE_DIR}/systemd/certm-agent.timer" /etc/systemd/system/cert
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.4 installed."
+echo "CertM Agent 1.0.0-rc.5 installed."
 echo "Discover: /opt/certm-agent/certm-agent.py discover"
 echo "Preflight: /opt/certm-agent/certm-agent.py preflight"

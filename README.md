@@ -49,7 +49,29 @@ The current release skips HTTPS bindings without a host name because CertM v2 se
 
 ### Install
 
-Download the three PowerShell files in `windows/` to one directory, then run:
+For a new server, open PowerShell as Administrator and run one command:
+
+```powershell
+$p="$env:TEMP\Install-CertM.ps1"; Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/radionu/certm-agent/main/windows/Bootstrap-CertMAgent.ps1' -OutFile $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
+```
+
+The bootstrap downloads the complete Windows agent, asks the operations engineer for the
+bootstrap credential using a secure prompt, installs the agent, enrolls immediately, and
+enables the Scheduled Task every six hours. The credential is not placed in the command
+history or logs. After successful enrollment, the bootstrap credential field is removed
+from `C:\CertM\config.json`; only the DPAPI-protected, client-specific identity remains.
+
+An optional friendly name can be supplied without exposing the credential:
+
+```powershell
+$p="$env:TEMP\Install-CertM.ps1"; Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/radionu/certm-agent/main/windows/Bootstrap-CertMAgent.ps1' -OutFile $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -DisplayName 'IIS Download Production'
+```
+
+Use `-Staged` when the machine requires the supervised discovery/dry-run workflow. The
+bootstrap then enrolls once but leaves the task disabled.
+
+For a manual or offline installation, download the three PowerShell files in `windows/`
+to one directory, then run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass

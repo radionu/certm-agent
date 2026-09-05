@@ -29,7 +29,13 @@ import os
 from pathlib import Path
 p = Path('/etc/certm/agent.json')
 cfg = json.loads(p.read_text())
-cfg['client_token'] = os.environ['CERTM_TOKEN']
+token = os.environ['CERTM_TOKEN']
+if token.startswith('ct_'):
+    cfg['client_token'] = token
+    cfg.pop('enrollment_token', None)
+else:
+    cfg['enrollment_token'] = token
+    cfg['client_token'] = ''
 p.write_text(json.dumps(cfg, indent=2) + '\n')
 p.chmod(0o600)
 PY
@@ -55,6 +61,13 @@ if version == 2:
 config['config_version'] = 3
 config.pop('management', None)
 config.setdefault('display_name', '')
+legacy_token = str(config.get('client_token', '')).strip()
+if 'enrollment_token' not in config and legacy_token and not legacy_token.startswith('ct_'):
+    config['enrollment_token'] = legacy_token
+    config['client_token'] = ''
+elif legacy_token:
+    config.pop('enrollment_token', None)
+config.setdefault('client_token', '')
 discovery = config.get('discovery')
 if not isinstance(discovery, dict):
     discovery = {}
@@ -86,6 +99,6 @@ install -m 0644 "${BASE_DIR}/systemd/certm-agent.timer" /etc/systemd/system/cert
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.3 installed."
+echo "CertM Agent 1.0.0-rc.4 installed."
 echo "Discover: /opt/certm-agent/certm-agent.py discover"
 echo "Preflight: /opt/certm-agent/certm-agent.py preflight"

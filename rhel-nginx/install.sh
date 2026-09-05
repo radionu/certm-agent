@@ -95,13 +95,15 @@ if [[ ! -f /etc/certm/agent.json ]]; then
     echo
     [[ -n "${TOKEN}" ]] || echo "Token cannot be empty."
   done
-  CERTM_TOKEN="${TOKEN}" "${PYTHON_BIN}" - <<'PY'
+  read -r -p "Enter optional CertM display name (Enter to use hostname): " DISPLAY_NAME
+  CERTM_TOKEN="${TOKEN}" CERTM_DISPLAY_NAME="${DISPLAY_NAME}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 from pathlib import Path
 p = Path('/etc/certm/agent.json')
 cfg = json.loads(p.read_text())
 token = os.environ['CERTM_TOKEN']
+cfg['display_name'] = os.environ.get('CERTM_DISPLAY_NAME', '').strip()
 if token.startswith('ct_'):
     cfg['client_token'] = token
     cfg.pop('enrollment_token', None)
@@ -171,7 +173,7 @@ install -m 0644 "${BASE_DIR}/systemd/certm-agent.timer" /etc/systemd/system/cert
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.6 installed. Running full preflight before enrollment."
+echo "CertM Agent 1.0.0-rc.7 installed. Running full preflight before enrollment."
 /opt/certm-agent/certm-agent.py preflight --enroll
 echo
 echo "Installation and preflight completed."

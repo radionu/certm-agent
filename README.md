@@ -19,6 +19,8 @@ sudo ./install.sh
 
 The nginx agent discovers current HTTPS vhosts from `nginx -T` on every run. Its configuration contains safety roots, API identity, logging, and timeout settings, but no domain or binding list. See `rhel-nginx/README.md` before enabling the systemd timer.
 
+Both agents support an optional `display_name` configuration value for a human-friendly server label. The real operating-system hostname is reported independently on every inventory run. Changing a hostname therefore does not require re-enrollment as long as the machine ID and client token remain valid.
+
 ## Windows/IIS
 
 The Windows agent:
@@ -53,6 +55,7 @@ Download the three PowerShell files in `windows/` to one directory, then run:
 Set-ExecutionPolicy -Scope Process Bypass
 .\Install-CertMAgent.ps1 `
   -ApiBase 'https://certm.pmr.vn/api/v2' `
+  -DisplayName 'IIS Download Server' `
   -EnrollmentToken 'PASTE_ENROLLMENT_KEY'
 ```
 
@@ -65,7 +68,7 @@ Every IIS HTTPS binding with a host name is evaluated dynamically on each run. T
 To upgrade an existing installation while preserving its DPAPI-protected client identity, run the installer without an enrollment token:
 
 ```powershell
-.\Install-CertMAgent.ps1
+.\Install-CertMAgent.ps1 -DisplayName 'IIS Download Server'
 ```
 
 Inspect current IIS bindings without contacting CertM or changing certificates:
@@ -95,7 +98,7 @@ Enable-ScheduledTask -TaskName 'CertM IIS Agent'
 
 The installer creates:
 
-- task `CertM IIS Agent`, running as `SYSTEM` every 30 minutes and disabled by default;
+- task `CertM IIS Agent`, running as `SYSTEM` at the configured interval and disabled by default;
 - program directory `C:\CertM\bin`;
 - protected configuration `C:\CertM\config.json`;
 - state file `C:\CertM\state.json` after the first deployment;

@@ -61,7 +61,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 The default installation is staged: it creates the scheduled task in a disabled state and does not run the agent. This prevents enrollment or certificate changes from racing ahead of administrator validation. `-RunOnce` and `-EnableTask` are explicit opt-ins for unattended deployments.
 
-The enrollment key is only a non-empty, administrator-rotatable bootstrap gate against unsolicited enrollment. It has no minimum length requirement and is not a long-lived client credential. A successful enrollment replaces it locally with a unique client token and removes the enrollment-token field completely. Windows protects both credentials with DPAPI while present; Linux protects its configuration with mode `0600`. Rotating the enrollment key affects only future enrollments.
+The enrollment key is only a non-empty, administrator-rotatable bootstrap gate against unsolicited enrollment. It has no minimum length requirement and is not a long-lived client credential. A successful enrollment replaces it locally with a unique client token and removes the enrollment-token field completely. Exactly one credential field exists at a time. Windows protects the active credential with DPAPI; Linux protects its configuration with mode `0600`. Rotating the enrollment key affects only future enrollments.
 
 Every IIS HTTPS binding with a host name is evaluated dynamically on each run. There is no static domain allowlist in the agent configuration. CertM returns a deployment only when a certificate assigned to that client covers the binding domain.
 

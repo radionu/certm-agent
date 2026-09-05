@@ -2,6 +2,7 @@
 param(
     [string]$EnrollmentToken = '',
     [string]$ApiBase = 'https://certm.pmr.vn/api/v2',
+    [ValidateLength(0, 100)][string]$DisplayName = '',
     [ValidateRange(5, 1440)][int]$IntervalMinutes = 30,
     [string]$VerifyConnectHost = '',
     [switch]$Force,
@@ -56,6 +57,7 @@ if (-not $existingConfiguration -or $Force) {
     $config = [ordered]@{
         config_version = 3
         api_base = $ApiBase.TrimEnd('/')
+        display_name = $DisplayName.Trim()
         enrollment_token_protected = [Convert]::ToBase64String($encrypted)
         client_token_protected = $null
         request_timeout_seconds = 60
@@ -75,6 +77,12 @@ else {
     if ($config.PSObject.Properties.Name -contains 'managed_domains') {
         $config.PSObject.Properties.Remove('managed_domains')
     }
+    if ($config.PSObject.Properties.Name -notcontains 'display_name') {
+        $config | Add-Member -NotePropertyName display_name -NotePropertyValue ''
+    }
+    if ($PSBoundParameters.ContainsKey('DisplayName')) {
+        $config.display_name = $DisplayName.Trim()
+    }
     Write-Host 'Existing DPAPI-protected client identity preserved.'
 }
 $config | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
@@ -90,7 +98,7 @@ if (-not $EnableTask) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not disable the CertM scheduled task for staged validation.' }
 }
 
-Write-Host "CertM IIS Agent 1.0.0-rc.2 installed."
+Write-Host "CertM IIS Agent 1.0.0-rc.3 installed."
 Write-Host "Configuration: $configPath"
 if ($EnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"

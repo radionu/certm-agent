@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.6"
+AGENT_VERSION = "1.0.0-rc.7"
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
 LOGGER = logging.getLogger("certm-agent")
@@ -225,6 +225,8 @@ def api_request(method, path, token, machine_id, payload=None, query=None):
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {token}",
+        "X-CertM-Agent-Type": "nginx",
+        "X-CertM-Agent-Version": AGENT_VERSION,
         "X-CertM-Machine-ID": machine_id,
         "User-Agent": f"CertM-Agent/{AGENT_VERSION}",
     }
@@ -1131,6 +1133,7 @@ def push_inventory(bindings, token, machine_id):
             "service": "nginx",
             "hostname": socket.gethostname(),
             "display_name": str(CONFIG.get("display_name", "")).strip(),
+            "agent_version": AGENT_VERSION,
             "items": items,
         },
     )

@@ -1,6 +1,7 @@
 {
   "config_version": 3,
   "api_base": "https://certm.pmr.vn/api/v2",
+  "display_name": "",
   "client_token": "PUT_ENROLLMENT_KEY_OR_CLIENT_TOKEN_HERE",
   "machine_id_file": "/etc/machine-id",
   "service": {

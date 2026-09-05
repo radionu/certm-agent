@@ -54,6 +54,7 @@ if version == 2:
         backup.chmod(0o600)
 config['config_version'] = 3
 config.pop('management', None)
+config.setdefault('display_name', '')
 discovery = config.get('discovery')
 if not isinstance(discovery, dict):
     discovery = {}
@@ -85,6 +86,6 @@ install -m 0644 "${BASE_DIR}/systemd/certm-agent.timer" /etc/systemd/system/cert
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.2 installed."
+echo "CertM Agent 1.0.0-rc.3 installed."
 echo "Discover: /opt/certm-agent/certm-agent.py discover"
 echo "Preflight: /opt/certm-agent/certm-agent.py preflight"

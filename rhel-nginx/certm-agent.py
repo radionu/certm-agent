@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.2"
+AGENT_VERSION = "1.0.0-rc.3"
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
 LOGGER = logging.getLogger("certm-agent")
 CONFIG = {}
@@ -108,6 +108,8 @@ def load_config(path):
         raise RuntimeError("api_base must use HTTPS and end with /api/v2")
     if not str(CONFIG.get("client_token", "")).strip():
         raise RuntimeError(f"client_token is missing in {CONFIG_FILE}")
+    if len(str(CONFIG.get("display_name", "")).strip()) > 100:
+        raise RuntimeError("display_name must not exceed 100 characters")
     roots = CONFIG.get("discovery", {}).get("allowed_certificate_roots", [])
     if not isinstance(roots, list) or not roots:
         raise RuntimeError("discovery.allowed_certificate_roots must not be empty")
@@ -1016,7 +1018,12 @@ def push_inventory(bindings, token, machine_id):
         "/client/inventory",
         token,
         machine_id,
-        {"service": "nginx", "items": items},
+        {
+            "service": "nginx",
+            "hostname": socket.gethostname(),
+            "display_name": str(CONFIG.get("display_name", "")).strip(),
+            "items": items,
+        },
     )
     log(f"Inventory submitted: {response.get('summary', {})}")
     return response
@@ -1569,6 +1576,7 @@ def enrollment_payload(os_release):
     return {
         "machine_id": machine_id,
         "hostname": socket.gethostname(),
+        "display_name": str(CONFIG.get("display_name", "")).strip(),
         "agent_type": "nginx",
         "agent_version": AGENT_VERSION,
         "os_name": os_release.get("id") or os_release.get("name") or "linux",

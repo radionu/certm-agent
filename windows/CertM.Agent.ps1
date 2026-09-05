@@ -6,7 +6,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.3'
+$script:AgentVersion = '1.0.0-rc.4'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 
@@ -423,6 +423,17 @@ try {
     if (([string]$script:Config.display_name).Length -gt 100) {
         throw 'display_name must not exceed 100 characters.'
     }
+    $hasStoredClientToken = (
+        $script:Config.PSObject.Properties.Name -contains 'client_token_protected' -and
+        -not [string]::IsNullOrWhiteSpace([string]$script:Config.client_token_protected)
+    )
+    if (
+        $hasStoredClientToken -and
+        $script:Config.PSObject.Properties.Name -contains 'enrollment_token_protected'
+    ) {
+        $script:Config.PSObject.Properties.Remove('enrollment_token_protected')
+        $configChanged = $true
+    }
     if ($configChanged) {
         Write-JsonFileAtomic $ConfigPath $script:Config
         Write-CertMLog 'Configuration migrated to config_version=3; IIS domains are discovered dynamically.'
@@ -443,9 +454,17 @@ try {
         exit 0
     }
 
-    $clientToken = Unprotect-LocalMachineSecret $script:Config.client_token_protected
+    $clientTokenProtected = $null
+    if ($script:Config.PSObject.Properties.Name -contains 'client_token_protected') {
+        $clientTokenProtected = $script:Config.client_token_protected
+    }
+    $clientToken = Unprotect-LocalMachineSecret $clientTokenProtected
     if (-not $clientToken) {
-        $enrollmentToken = Unprotect-LocalMachineSecret $script:Config.enrollment_token_protected
+        $enrollmentTokenProtected = $null
+        if ($script:Config.PSObject.Properties.Name -contains 'enrollment_token_protected') {
+            $enrollmentTokenProtected = $script:Config.enrollment_token_protected
+        }
+        $enrollmentToken = Unprotect-LocalMachineSecret $enrollmentTokenProtected
         if (-not $enrollmentToken) { throw 'No client token or enrollment token is configured.' }
         $preflight = Invoke-CertMApi GET '/client/preflight' $enrollmentToken $machineId $null
         if ($preflight.status -ne 'enrollment_available') {
@@ -461,8 +480,16 @@ try {
             os_name = $os.Caption
             os_version = $os.Version
         }
-        $script:Config.client_token_protected = Protect-LocalMachineSecret $enrollment.client_token
-        $script:Config.enrollment_token_protected = $null
+        $protectedClientToken = Protect-LocalMachineSecret $enrollment.client_token
+        if ($script:Config.PSObject.Properties.Name -contains 'client_token_protected') {
+            $script:Config.client_token_protected = $protectedClientToken
+        }
+        else {
+            $script:Config | Add-Member -NotePropertyName client_token_protected -NotePropertyValue $protectedClientToken
+        }
+        if ($script:Config.PSObject.Properties.Name -contains 'enrollment_token_protected') {
+            $script:Config.PSObject.Properties.Remove('enrollment_token_protected')
+        }
         Write-JsonFileAtomic $ConfigPath $script:Config
         Write-CertMLog "Enrolled as client $($enrollment.client_id); waiting for administrator approval."
         exit 0

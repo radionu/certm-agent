@@ -12,8 +12,21 @@ This repository intentionally contains no enrollment keys, client tokens, privat
 ## RHEL/nginx
 
 ```bash
-git clone https://github.com/radionu/certm-agent.git
-cd certm-agent/rhel-nginx
+sudo dnf install -y git
+sudo git clone https://github.com/radionu/certm-agent.git /opt/certm-agent-src
+cd /opt/certm-agent-src/rhel-nginx
+sudo ./install.sh
+```
+
+The repository is public. The HTTPS clone requires no GitHub account, SSH key, personal
+access token, or stored Git credentials. Keep `/opt/certm-agent-src` as the public source
+checkout; the installed runtime is kept separately in `/opt/certm-agent`.
+
+To upgrade an installed agent from the same public checkout:
+
+```bash
+sudo git -C /opt/certm-agent-src pull --ff-only origin main
+cd /opt/certm-agent-src/rhel-nginx
 sudo ./install.sh
 ```
 
@@ -28,7 +41,11 @@ runs discover automatically. Its configuration contains safety roots, API identi
 logging, and timeout settings, but no domain or binding list. See `rhel-nginx/README.md`
 before enabling the systemd timer.
 
-Both agents support an optional `display_name` configuration value for a human-friendly server label. The real operating-system hostname is reported independently on every inventory run. Changing a hostname therefore does not require re-enrollment as long as the machine ID and client token remain valid.
+Both agents support an optional `display_name` configuration value for a human-friendly server label. A new Linux installation asks for this value and always writes the field to `/etc/certm/agent.json`; upgrades add an empty field when an older configuration does not have it. The real operating-system hostname is reported independently on every inventory run. Changing a hostname therefore does not require re-enrollment as long as the machine ID and client token remain valid.
+
+Every authenticated API call includes the running agent type and version. Inventory also
+includes `agent_version`, allowing CertM to refresh an existing client's displayed version
+after an upgrade without re-enrollment.
 
 Agent log lines use the fixed Vietnam offset `UTC+07:00` and include `+07:00` in every timestamp. Protocol, certificate-validity, and state timestamps remain UTC.
 

@@ -8,6 +8,78 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+echo "CertM Agent pre-install checks"
+
+PYTHON_BIN=""
+PYTHON_VERSION=""
+declare -A SEEN_PYTHON=()
+for candidate in python3 python3.13 python3.12 python3.11 python3.10 python3.9 python3.8; do
+  candidate_path="$(command -v "${candidate}" 2>/dev/null || true)"
+  [[ -n "${candidate_path}" ]] || continue
+  [[ -z "${SEEN_PYTHON[${candidate_path}]:-}" ]] || continue
+  SEEN_PYTHON["${candidate_path}"]=1
+  if "${candidate_path}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)'; then
+    PYTHON_BIN="${candidate_path}"
+    PYTHON_VERSION="$("${candidate_path}" -c 'import platform; print(platform.python_version())')"
+    break
+  fi
+done
+
+if [[ -z "${PYTHON_BIN}" ]]; then
+  detected="$(python3 --version 2>&1 || true)"
+  echo "FAILED: Python 3.8 or newer is required; detected: ${detected:-none}" >&2
+  echo "On AlmaLinux/RHEL 8, install it first with: dnf install -y python39" >&2
+  exit 1
+fi
+echo "OK: Python ${PYTHON_VERSION} (${PYTHON_BIN})"
+
+for command in openssl nginx systemctl install; do
+  if ! command -v "${command}" >/dev/null 2>&1; then
+    echo "FAILED: Required command not found: ${command}" >&2
+    exit 1
+  fi
+  echo "OK: Found ${command}"
+done
+
+if [[ ! -s /etc/machine-id ]]; then
+  echo "FAILED: /etc/machine-id is missing or empty" >&2
+  exit 1
+fi
+echo "OK: Machine ID is present"
+
+NGINX_UNIT="nginx"
+if [[ -f /etc/certm/agent.json ]]; then
+  NGINX_UNIT="$("${PYTHON_BIN}" - <<'PY'
+import json
+from pathlib import Path
+config = json.loads(Path('/etc/certm/agent.json').read_text())
+print(str(config.get('service', {}).get('systemd_unit', 'nginx')).strip())
+PY
+)"
+fi
+if [[ -z "${NGINX_UNIT}" ]]; then
+  echo "FAILED: service.systemd_unit must not be empty" >&2
+  exit 1
+fi
+if [[ "$(systemctl show "${NGINX_UNIT}" --property=LoadState --value 2>/dev/null)" != "loaded" ]]; then
+  echo "FAILED: systemd unit is not loaded: ${NGINX_UNIT}" >&2
+  exit 1
+fi
+if ! systemctl is-active --quiet "${NGINX_UNIT}"; then
+  echo "FAILED: systemd unit is not active: ${NGINX_UNIT}" >&2
+  exit 1
+fi
+echo "OK: systemd unit ${NGINX_UNIT} is active"
+
+nginx -v
+openssl version
+if ! nginx -t; then
+  echo "FAILED: nginx configuration test failed" >&2
+  exit 1
+fi
+echo "OK: nginx configuration syntax is valid"
+echo "All pre-install checks passed; continuing with CertM setup."
+
 install -d -m 0750 /opt/certm-agent
 install -d -m 0700 /opt/certm-agent/bkup
 install -d -m 0750 /etc/certm
@@ -23,7 +95,7 @@ if [[ ! -f /etc/certm/agent.json ]]; then
     echo
     [[ -n "${TOKEN}" ]] || echo "Token cannot be empty."
   done
-  CERTM_TOKEN="${TOKEN}" python3 - <<'PY'
+  CERTM_TOKEN="${TOKEN}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 from pathlib import Path
@@ -43,7 +115,7 @@ else
   echo "/etc/certm/agent.json already exists; keeping existing configuration."
 fi
 
-python3 - <<'PY'
+"${PYTHON_BIN}" - <<'PY'
 import json
 import shutil
 from pathlib import Path
@@ -91,6 +163,7 @@ path.chmod(0o600)
 PY
 
 install -m 0750 "${BASE_DIR}/certm-agent.py" /opt/certm-agent/certm-agent.py
+sed -i "1s|^#!.*$|#!${PYTHON_BIN}|" /opt/certm-agent/certm-agent.py
 rm -f /opt/certm-agent/certm-agent-core.py
 
 install -m 0644 "${BASE_DIR}/systemd/certm-agent.service" /etc/systemd/system/certm-agent.service
@@ -98,6 +171,10 @@ install -m 0644 "${BASE_DIR}/systemd/certm-agent.timer" /etc/systemd/system/cert
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.5 installed."
-echo "Discover: /opt/certm-agent/certm-agent.py discover"
-echo "Preflight: /opt/certm-agent/certm-agent.py preflight"
+echo "CertM Agent 1.0.0-rc.6 installed. Running full preflight before enrollment."
+/opt/certm-agent/certm-agent.py preflight --enroll
+echo
+echo "Installation and preflight completed."
+echo "The standalone discover command is optional and read-only:"
+echo "  /opt/certm-agent/certm-agent.py discover"
+echo "The timer remains disabled until dry-run and one supervised renewal succeed."

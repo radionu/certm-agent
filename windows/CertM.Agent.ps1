@@ -6,7 +6,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.5'
+$script:AgentVersion = '1.0.0-rc.7'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -104,6 +104,8 @@ function Invoke-CertMApi {
     $baseUrl = $script:Config.api_base.TrimEnd('/')
     $headers = @{
         Authorization = "Bearer $Token"
+        'X-CertM-Agent-Type' = 'iis'
+        'X-CertM-Agent-Version' = $script:AgentVersion
         'X-CertM-Machine-ID' = $MachineId
         Accept = 'application/json'
     }
@@ -218,6 +220,7 @@ function Send-Inventory {
         service = 'iis'
         hostname = $env:COMPUTERNAME
         display_name = [string]$script:Config.display_name
+        agent_version = $script:AgentVersion
         items = $items
     } | Out-Null
 }

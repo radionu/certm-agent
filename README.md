@@ -17,7 +17,16 @@ cd certm-agent/rhel-nginx
 sudo ./install.sh
 ```
 
-The nginx agent discovers current HTTPS vhosts from `nginx -T` on every run. Its configuration contains safety roots, API identity, logging, and timeout settings, but no domain or binding list. See `rhel-nginx/README.md` before enabling the systemd timer.
+The Linux installer requires Python 3.8 or newer. It validates Python, OpenSSL, nginx,
+systemd, machine ID, nginx syntax, discovered certificate/key pairs, local write paths, and
+CertM API reachability before enrollment. On AlmaLinux/RHEL 8, `python39` is supported and
+the installer uses it directly without changing the operating system's `python3` command.
+
+The nginx agent discovers current HTTPS vhosts from `nginx -T` on every run. The standalone
+`discover` command is optional and read-only; install/preflight and later inventory/renewal
+runs discover automatically. Its configuration contains safety roots, API identity,
+logging, and timeout settings, but no domain or binding list. See `rhel-nginx/README.md`
+before enabling the systemd timer.
 
 Both agents support an optional `display_name` configuration value for a human-friendly server label. The real operating-system hostname is reported independently on every inventory run. Changing a hostname therefore does not require re-enrollment as long as the machine ID and client token remain valid.
 

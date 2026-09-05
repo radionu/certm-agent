@@ -786,5 +786,113 @@ class NginxDeploymentRollbackTest(unittest.TestCase):
                 agent.CONFIG = old_config
 
 
+class LinuxInstallAndPreflightTest(unittest.TestCase):
+    def test_installer_checks_python_before_writing_and_runs_preflight_enrollment(self):
+        installer = (REPOSITORY_ROOT / "rhel-nginx" / "install.sh").read_text()
+
+        version_gate = installer.index("Python 3.8 or newer is required")
+        first_install = installer.index("install -d -m 0750 /opt/certm-agent")
+        self.assertLess(version_gate, first_install)
+        self.assertIn(
+            "/opt/certm-agent/certm-agent.py preflight --enroll",
+            installer,
+        )
+        self.assertIn(
+            'sed -i "1s|^#!.*$|#!${PYTHON_BIN}|"',
+            installer,
+        )
+
+    def test_agent_rejects_python_older_than_38(self):
+        with mock.patch.object(agent.os, "geteuid", return_value=0), \
+                mock.patch.object(agent.sys, "version_info", (3, 6, 8)):
+            with self.assertRaisesRegex(RuntimeError, "Python 3.8 or newer"):
+                agent.validate_local_environment()
+
+    def test_preflight_auto_enrolls_only_after_all_local_checks(self):
+        environment = {
+            "python": "3.9.18",
+            "openssl": "OpenSSL 1.1.1k",
+            "nginx": "nginx version: nginx/1.14.1",
+            "systemd_unit": "nginx",
+            "machine_id_file": "/etc/machine-id",
+        }
+        discovered = {"certificate_pairs": 1, "config_files": 1}
+        responses = [
+            {"status": "enrollment_available"},
+            {
+                "status": "pending_approval",
+                "client_id": 6,
+                "client_token": "ct_client_6",
+            },
+        ]
+        with mock.patch.object(
+            agent,
+            "validate_local_environment",
+            return_value=environment,
+        ) as local, mock.patch.object(
+            agent,
+            "discover_bindings",
+            return_value=[{"domain": "test.pmr.vn"}],
+        ) as discover, mock.patch.object(
+            agent,
+            "validate_discovered_environment",
+            return_value=discovered,
+        ) as validate_discovered, mock.patch.object(
+            agent,
+            "load_identity",
+            return_value=("enrollment", "machine"),
+        ), mock.patch.object(
+            agent,
+            "read_os_release",
+            return_value={"id": "almalinux", "version_id": "8.10"},
+        ), mock.patch.object(
+            agent,
+            "api_request",
+            side_effect=responses,
+        ) as request, mock.patch.object(
+            agent,
+            "save_client_token",
+        ) as save, mock.patch.object(
+            agent,
+            "input",
+            side_effect=AssertionError("auto enrollment must not prompt"),
+            create=True,
+        ):
+            agent.preflight(auto_enroll=True)
+
+        local.assert_called_once_with()
+        discover.assert_called_once_with()
+        validate_discovered.assert_called_once()
+        self.assertEqual(request.call_args_list[0].args[1], "/client/preflight")
+        self.assertEqual(request.call_args_list[1].args[1], "/client/enroll")
+        save.assert_called_once_with("ct_client_6")
+
+    def test_served_verification_error_identifies_endpoint_and_files(self):
+        previous = agent.CONFIG
+        agent.CONFIG = {
+            "verify": {
+                "connect_host": "127.0.0.1",
+                "retry_timeout_seconds": 0,
+                "retry_interval_seconds": 0,
+            },
+        }
+        binding = {
+            "domain": "ftaold.pmr.vn",
+            "port": 443,
+            "listen_host": "10.0.0.5",
+            "certificate_path": "/etc/nginx/ssl/ftaold/fullchain.pem",
+            "config_file": "/etc/nginx/conf.d/ftaold.conf",
+        }
+        try:
+            with mock.patch.object(agent, "served_fingerprint", return_value="b" * 64):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"via 127\.0\.0\.1:443.*expected=.*served=.*certificate_path=.*config_file=",
+                ):
+                    agent.verify_served(binding, "a" * 64)
+        finally:
+            agent.CONFIG = previous
+
+
 if __name__ == "__main__":
     unittest.main()

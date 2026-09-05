@@ -59,7 +59,6 @@ if (-not $existingConfiguration -or $Force) {
         api_base = $ApiBase.TrimEnd('/')
         display_name = $DisplayName.Trim()
         enrollment_token_protected = [Convert]::ToBase64String($encrypted)
-        client_token_protected = $null
         request_timeout_seconds = 60
         verify_timeout_seconds = 15
         verify_retry_timeout_seconds = 30

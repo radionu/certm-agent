@@ -18,6 +18,10 @@ $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom
 Assert-True ($config.config_version -eq 3) 'Windows example config must use config_version=3.'
 Assert-True ($config.PSObject.Properties.Name -contains 'display_name') `
     'Windows example config must expose an optional display_name.'
+Assert-True ($config.PSObject.Properties.Name -contains 'enrollment_token_protected') `
+    'Windows pre-enrollment config must contain the bootstrap credential.'
+Assert-True ($config.PSObject.Properties.Name -notcontains 'client_token_protected') `
+    'Windows pre-enrollment config must not contain a client-token placeholder.'
 Assert-True ($config.PSObject.Properties.Name -notcontains 'managed_domains') `
     'Windows example config must not contain managed_domains.'
 Assert-True ($agent -notmatch 'function\s+Test-DomainAllowed') `

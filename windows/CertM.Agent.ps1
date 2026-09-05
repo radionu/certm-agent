@@ -6,7 +6,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.2'
+$script:AgentVersion = '1.0.0-rc.3'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 
@@ -210,7 +210,12 @@ function Send-Inventory {
             binding_id = $_.binding_id
         }
     })
-    Invoke-CertMApi POST '/client/inventory' $Token $MachineId @{ service = 'iis'; items = $items } | Out-Null
+    Invoke-CertMApi POST '/client/inventory' $Token $MachineId @{
+        service = 'iis'
+        hostname = $env:COMPUTERNAME
+        display_name = [string]$script:Config.display_name
+        items = $items
+    } | Out-Null
 }
 
 function Set-IisBindingCertificate {
@@ -411,6 +416,13 @@ try {
         $script:Config.PSObject.Properties.Remove('managed_domains')
         $configChanged = $true
     }
+    if ($script:Config.PSObject.Properties.Name -notcontains 'display_name') {
+        $script:Config | Add-Member -NotePropertyName display_name -NotePropertyValue ''
+        $configChanged = $true
+    }
+    if (([string]$script:Config.display_name).Length -gt 100) {
+        throw 'display_name must not exceed 100 characters.'
+    }
     if ($configChanged) {
         Write-JsonFileAtomic $ConfigPath $script:Config
         Write-CertMLog 'Configuration migrated to config_version=3; IIS domains are discovered dynamically.'
@@ -443,6 +455,7 @@ try {
         $enrollment = Invoke-CertMApi POST '/client/enroll' $enrollmentToken $machineId @{
             machine_id = $machineId
             hostname = $env:COMPUTERNAME
+            display_name = [string]$script:Config.display_name
             agent_type = 'iis'
             agent_version = $script:AgentVersion
             os_name = $os.Caption

@@ -1,10 +1,12 @@
-# CertM nginx Agent 1.0.0-rc.2
+# CertM nginx Agent 1.0.0-rc.3
 
 Public pull-based API v2 agent for RHEL-family Linux and nginx.
 
 ## Dynamic discovery
 
 The agent runs `nginx -T` at the start of every `discover`, `inventory`, and `renew` operation. Domains and certificate paths are not stored in `agent.json`.
+
+`display_name` is an optional friendly server label. The agent always reports the current operating-system hostname separately on each inventory run, so renaming the host does not require re-enrollment while its machine ID and client token remain unchanged.
 
 It discovers concrete DNS names from HTTPS `server` blocks containing:
 

@@ -30,7 +30,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.3'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.4'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match "ValidateSet\('Run', 'Discover', 'Inventory', 'DryRun'\)") `
     'The IIS agent must expose safe discovery and dry-run modes.'
@@ -42,6 +42,10 @@ Assert-True ($agent -match 'hostname\s*=\s*\$env:COMPUTERNAME') `
     'The IIS agent must report the current OS hostname.'
 Assert-True ($agent -match 'display_name\s*=\s*\[string\]\$script:Config\.display_name') `
     'The IIS agent must report its configured display name.'
+Assert-True ($agent -match "Properties\.Remove\('enrollment_token_protected'\)") `
+    'The IIS agent must remove the bootstrap credential after enrollment.'
+Assert-True ($installer -match "Properties\.Remove\('enrollment_token_protected'\)") `
+    'The IIS upgrade path must remove an obsolete bootstrap credential.'
 Assert-True ($installer -match '\[switch\]\$EnableTask') `
     'The IIS installer must require an explicit switch to enable its scheduled task.'
 Assert-True ($installer -match '\[switch\]\$RunOnce') `

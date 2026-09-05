@@ -1,4 +1,4 @@
-# CertM nginx Agent 1.0.0-rc.3
+# CertM nginx Agent 1.0.0-rc.4
 
 Public pull-based API v2 agent for RHEL-family Linux and nginx.
 
@@ -7,6 +7,8 @@ Public pull-based API v2 agent for RHEL-family Linux and nginx.
 The agent runs `nginx -T` at the start of every `discover`, `inventory`, and `renew` operation. Domains and certificate paths are not stored in `agent.json`.
 
 `display_name` is an optional friendly server label. The agent always reports the current operating-system hostname separately on each inventory run, so renaming the host does not require re-enrollment while its machine ID and client token remain unchanged.
+
+Before enrollment, `agent.json` contains `enrollment_token`. After CertM returns the unique client credential, the agent writes `client_token` and removes `enrollment_token` completely. The bootstrap enrollment key is never retained after successful enrollment.
 
 It discovers concrete DNS names from HTTPS `server` blocks containing:
 

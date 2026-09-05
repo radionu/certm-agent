@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 
+import sys
+
+if sys.version_info < (3, 8):
+    print(
+        "ERROR CertM Agent requires Python 3.8 or newer; "
+        f"current version is {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 import argparse
 import base64
 import fcntl
@@ -13,7 +23,6 @@ import socket
 import ssl
 import stat
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
@@ -25,7 +34,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.5"
+AGENT_VERSION = "1.0.0-rc.6"
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
 LOGGER = logging.getLogger("certm-agent")
@@ -63,7 +72,7 @@ def log(message, level=logging.INFO):
 
 
 def warn(message):
-    log(f"WARNING {message}", logging.WARNING)
+    log(message, logging.WARNING)
 
 
 def atomic_write(path, data, default_mode=0o600):
@@ -109,9 +118,9 @@ def load_config(path):
         raise RuntimeError("api_base must use HTTPS and end with /api/v2")
     client_token = str(CONFIG.get("client_token", "")).strip()
     enrollment_token = str(CONFIG.get("enrollment_token", "")).strip()
-    if not client_token and not enrollment_token:
+    if bool(client_token) == bool(enrollment_token):
         raise RuntimeError(
-            f"client_token or enrollment_token is missing in {CONFIG_FILE}"
+            f"Exactly one of client_token or enrollment_token is required in {CONFIG_FILE}"
         )
     if len(str(CONFIG.get("display_name", "")).strip()) > 100:
         raise RuntimeError("display_name must not exceed 100 characters")
@@ -257,10 +266,91 @@ def validate_local_environment():
     for command in ("openssl", "nginx", "systemctl"):
         if shutil.which(command) is None:
             raise RuntimeError(f"Required command not found: {command}")
+    openssl = run(["openssl", "version"], check=False)
+    if openssl.returncode != 0:
+        raise RuntimeError("openssl version failed")
     nginx = run(["nginx", "-v"], check=False)
     if nginx.returncode != 0:
         raise RuntimeError("nginx -v failed")
-    return (nginx.stderr or nginx.stdout).strip()
+    run(["nginx", "-t"], timeout=60)
+    unit = str(CONFIG.get("service", {}).get("systemd_unit", "nginx")).strip()
+    if not unit:
+        raise RuntimeError("service.systemd_unit must not be empty")
+    loaded = run(
+        ["systemctl", "show", unit, "--property=LoadState", "--value"],
+        check=False,
+    )
+    if loaded.returncode != 0 or loaded.stdout.strip() != "loaded":
+        raise RuntimeError(f"systemd unit is not loaded: {unit}")
+    active = run(["systemctl", "is-active", "--quiet", unit], check=False)
+    if active.returncode != 0:
+        raise RuntimeError(f"systemd unit is not active: {unit}")
+    machine_path = Path(CONFIG.get("machine_id_file", "/etc/machine-id"))
+    if not machine_path.is_file() or not machine_path.read_text().strip():
+        raise RuntimeError(f"Machine ID file is missing or empty: {machine_path}")
+    mode = stat.S_IMODE(CONFIG_FILE.stat().st_mode)
+    if mode & 0o077:
+        raise RuntimeError(
+            f"Configuration file permissions are too open: {CONFIG_FILE} mode={mode:04o}; "
+            "expected 0600"
+        )
+    return {
+        "python": (
+            f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        ),
+        "openssl": (openssl.stdout or openssl.stderr).strip(),
+        "nginx": (nginx.stderr or nginx.stdout).strip(),
+        "systemd_unit": unit,
+        "machine_id_file": str(machine_path),
+    }
+
+
+def validate_discovered_environment(bindings):
+    if not bindings:
+        raise RuntimeError("No concrete nginx HTTPS bindings were discovered")
+    pairs = {}
+    config_files = set()
+    for binding in bindings:
+        certificate = Path(binding["certificate_write_path"])
+        key = Path(binding["key_write_path"])
+        pairs.setdefault((str(certificate), str(key)), binding)
+        source = binding.get("config_file")
+        if source:
+            config_files.add(str(Path(source).resolve(strict=False)))
+    for (certificate_value, key_value), binding in pairs.items():
+        certificate = Path(certificate_value)
+        key = Path(key_value)
+        if not certificate.is_file():
+            raise RuntimeError(
+                f"Configured certificate file is missing for {binding['domain']}: {certificate}"
+            )
+        if not key.is_file():
+            raise RuntimeError(
+                f"Configured private key file is missing for {binding['domain']}: {key}"
+            )
+        if not os.access(certificate, os.R_OK):
+            raise RuntimeError(f"Configured certificate is not readable: {certificate}")
+        if not os.access(key, os.R_OK):
+            raise RuntimeError(f"Configured private key is not readable: {key}")
+        if not os.access(certificate.parent, os.W_OK):
+            raise RuntimeError(f"Certificate directory is not writable: {certificate.parent}")
+        if not os.access(key.parent, os.W_OK):
+            raise RuntimeError(f"Private-key directory is not writable: {key.parent}")
+        fingerprint_file(certificate)
+        validate_cert_key(certificate, key)
+    for source_value in config_files:
+        source = Path(source_value)
+        if not source.is_file() or not os.access(source, os.R_OK | os.W_OK):
+            raise RuntimeError(f"nginx config file is not readable and writable: {source}")
+    managed_root = Path(
+        CONFIG.get("paths", {}).get("managed_certificate_root", "/etc/certm/live")
+    )
+    if not managed_root.is_dir() or not os.access(managed_root, os.W_OK):
+        raise RuntimeError(f"Managed certificate directory is not writable: {managed_root}")
+    return {
+        "certificate_pairs": len(pairs),
+        "config_files": len(config_files),
+    }
 
 
 def nginx_dump():
@@ -720,8 +810,7 @@ def inspect_certificate(path):
 
 
 def served_fingerprint(binding):
-    configured_host = str(CONFIG.get("verify", {}).get("connect_host", "")).strip()
-    host = configured_host or binding.get("listen_host") or "127.0.0.1"
+    host = verification_host(binding)
     timeout = int(CONFIG.get("verify", {}).get("connect_timeout_seconds", 15))
     context = ssl.create_default_context()
     context.check_hostname = False
@@ -729,6 +818,11 @@ def served_fingerprint(binding):
     with socket.create_connection((host, int(binding["port"])), timeout=timeout) as sock:
         with context.wrap_socket(sock, server_hostname=binding["domain"]) as tls:
             return hashlib.sha256(tls.getpeercert(binary_form=True)).hexdigest()
+
+
+def verification_host(binding):
+    configured_host = str(CONFIG.get("verify", {}).get("connect_host", "")).strip()
+    return configured_host or binding.get("listen_host") or "127.0.0.1"
 
 
 def verify_served(binding, expected):
@@ -747,7 +841,11 @@ def verify_served(binding, expected):
             break
         time.sleep(interval)
     raise RuntimeError(
-        f"{binding['domain']}:{binding['port']} does not serve expected certificate; last={last}"
+        f"{binding['domain']}:{binding['port']} via "
+        f"{verification_host(binding)}:{binding['port']} does not serve expected certificate; "
+        f"expected={expected}; served={last}; "
+        f"certificate_path={binding['certificate_path']}; "
+        f"config_file={binding.get('config_file') or 'unknown'}"
     )
 
 
@@ -1334,6 +1432,9 @@ def nginx_test_reload():
     run(["nginx", "-t"])
     unit = str(CONFIG.get("service", {}).get("systemd_unit", "nginx"))
     run(["systemctl", "reload", unit])
+    active = run(["systemctl", "is-active", "--quiet", unit], check=False)
+    if active.returncode != 0:
+        raise RuntimeError(f"nginx systemd unit is not active after reload: {unit}")
 
 
 def deploy_group(bindings, desired, token, machine_id, dry_run=False):
@@ -1595,22 +1696,39 @@ def enrollment_payload(os_release):
     }
 
 
-def preflight():
-    nginx_version = validate_local_environment()
+def preflight(auto_enroll=False):
+    environment = validate_local_environment()
     bindings = discover_bindings()
+    discovered = validate_discovered_environment(bindings)
     token, machine_id = load_identity()
     os_release = read_os_release()
-    log(f"CertM Agent version={AGENT_VERSION}")
-    log(f"Platform={os_release.get('pretty_name', os_release.get('name', 'Linux'))}")
-    log(f"Web service={nginx_version}")
-    log(f"Discovered bindings={len(bindings)}")
+    log(f"PREFLIGHT OK: CertM Agent version={AGENT_VERSION}")
+    log(
+        "PREFLIGHT OK: Platform="
+        f"{os_release.get('pretty_name', os_release.get('name', 'Linux'))}"
+    )
+    log(f"PREFLIGHT OK: Python={environment['python']} (minimum 3.8)")
+    log(f"PREFLIGHT OK: OpenSSL={environment['openssl']}")
+    log(f"PREFLIGHT OK: Web service={environment['nginx']}")
+    log("PREFLIGHT OK: nginx configuration syntax is valid")
+    log(f"PREFLIGHT OK: systemd unit {environment['systemd_unit']} is active")
+    log(f"PREFLIGHT OK: Machine ID={environment['machine_id_file']}")
+    log(
+        f"PREFLIGHT OK: Discovered bindings={len(bindings)}, "
+        f"certificate/key pairs={discovered['certificate_pairs']}, "
+        f"config files={discovered['config_files']}"
+    )
     identity = api_request("GET", "/client/preflight", token, machine_id)
     status = str(identity.get("status", "")).lower()
     if status == "enrollment_available":
-        answer = input("This server is not enrolled with CertM. Enroll now? [y/N]: ").strip().lower()
-        if answer not in ("y", "yes"):
-            log("Enrollment skipped")
-            return
+        log("PREFLIGHT OK: CertM API is reachable and enrollment is available")
+        if not auto_enroll:
+            answer = input(
+                "All preflight checks passed. Enroll this server now? [y/N]: "
+            ).strip().lower()
+            if answer not in ("y", "yes"):
+                log("Enrollment skipped")
+                return
         response = api_request(
             "POST", "/client/enroll", token, machine_id, enrollment_payload(os_release)
         )
@@ -1688,7 +1806,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="CertM API v2 nginx agent")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_FILE))
     subcommands = parser.add_subparsers(dest="command", required=True)
-    subcommands.add_parser("preflight")
+    preflight_parser = subcommands.add_parser("preflight")
+    preflight_parser.add_argument("--enroll", action="store_true")
     subcommands.add_parser("discover")
     subcommands.add_parser("inventory")
     renew_parser = subcommands.add_parser("renew")
@@ -1706,10 +1825,11 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise RuntimeError("Another CertM agent process is already running")
+            warn("Another CertM agent process is already running; this run was skipped")
+            return
         log(f"Starting certm-agent command={args.command} version={AGENT_VERSION}")
         if args.command == "preflight":
-            preflight()
+            preflight(bool(args.enroll))
         elif args.command == "discover":
             validate_local_environment()
             print(

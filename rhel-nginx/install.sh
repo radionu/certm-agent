@@ -35,7 +35,7 @@ if token.startswith('ct_'):
     cfg.pop('enrollment_token', None)
 else:
     cfg['enrollment_token'] = token
-    cfg['client_token'] = ''
+    cfg.pop('client_token', None)
 p.write_text(json.dumps(cfg, indent=2) + '\n')
 p.chmod(0o600)
 PY
@@ -64,10 +64,9 @@ config.setdefault('display_name', '')
 legacy_token = str(config.get('client_token', '')).strip()
 if 'enrollment_token' not in config and legacy_token and not legacy_token.startswith('ct_'):
     config['enrollment_token'] = legacy_token
-    config['client_token'] = ''
+    config.pop('client_token', None)
 elif legacy_token:
     config.pop('enrollment_token', None)
-config.setdefault('client_token', '')
 discovery = config.get('discovery')
 if not isinstance(discovery, dict):
     discovery = {}

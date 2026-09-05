@@ -52,6 +52,8 @@ Assert-True ($bootstrap -match 'RunOnce\s*=\s*\$true') `
     'The one-command bootstrap must perform initial enrollment immediately.'
 Assert-True ($bootstrap -match 'EnableTask\s*=\s*-not\s+\$Staged') `
     'The one-command bootstrap must enable automation unless staged mode is requested.'
+Assert-True ($bootstrap -match "PSBoundParameters\.ContainsKey\('DisplayName'\)") `
+    'The one-command bootstrap must preserve an existing display name unless explicitly changed.'
 Assert-True ($bootstrap -match 'ZeroFreeBSTR') `
     'The one-command bootstrap must clear the plaintext credential buffer.'
 Assert-True ($installer -match 'Copy-Item[^\r\n]+\$sourceUninstaller') `

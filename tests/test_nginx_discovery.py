@@ -273,7 +273,7 @@ server {
         self.assertEqual(config["config_version"], 3)
         self.assertIn("display_name", config)
         self.assertIn("enrollment_token", config)
-        self.assertEqual(config["client_token"], "")
+        self.assertNotIn("client_token", config)
         self.assertNotIn("management", config)
         self.assertNotIn("domains", config)
         self.assertTrue(config["discovery"]["allowed_certificate_roots"])

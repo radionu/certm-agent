@@ -3,7 +3,6 @@
   "api_base": "https://certm.pmr.vn/api/v2",
   "display_name": "",
   "enrollment_token_protected": "created-by-installer",
-  "client_token_protected": null,
   "request_timeout_seconds": 60,
   "verify_timeout_seconds": 15,
   "verify_retry_timeout_seconds": 30,

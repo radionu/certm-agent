@@ -329,7 +329,28 @@ server {
         payload = request.call_args.args[4]
         self.assertEqual(payload["hostname"], "edge-01")
         self.assertEqual(payload["display_name"], "Nginx Edge 01")
+        self.assertEqual(payload["agent_version"], agent.AGENT_VERSION)
         self.assertEqual(payload["items"], [])
+
+    def test_every_api_request_reports_agent_type_and_version_headers(self):
+        previous = agent.CONFIG
+        agent.CONFIG = {
+            "api_base": "https://certm.pmr.vn/api/v2",
+            "network": {"api_timeout_seconds": 30},
+        }
+        response = mock.MagicMock()
+        response.read.return_value = b"{}"
+        response.__enter__.return_value = response
+        try:
+            with mock.patch.object(agent.urllib.request, "urlopen", return_value=response) as open_url:
+                agent.api_request("GET", "/client/preflight", "token", "machine-id")
+        finally:
+            agent.CONFIG = previous
+
+        request = open_url.call_args.args[0]
+        headers = {key.lower(): value for key, value in request.header_items()}
+        self.assertEqual(headers["x-certm-agent-type"], "nginx")
+        self.assertEqual(headers["x-certm-agent-version"], agent.AGENT_VERSION)
 
     def test_saving_client_token_removes_bootstrap_enrollment_token(self):
         previous_config = agent.CONFIG
@@ -801,6 +822,8 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
             'sed -i "1s|^#!.*$|#!${PYTHON_BIN}|"',
             installer,
         )
+        self.assertIn("Enter optional CertM display name", installer)
+        self.assertIn("config.setdefault('display_name', '')", installer)
 
     def test_agent_rejects_python_older_than_38(self):
         with mock.patch.object(agent.os, "geteuid", return_value=0), \

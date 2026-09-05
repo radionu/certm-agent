@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.3"
+AGENT_VERSION = "1.0.0-rc.4"
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
 LOGGER = logging.getLogger("certm-agent")
 CONFIG = {}
@@ -106,8 +106,12 @@ def load_config(path):
     api_base = str(CONFIG.get("api_base", "")).rstrip("/")
     if not api_base.startswith("https://") or not api_base.endswith("/api/v2"):
         raise RuntimeError("api_base must use HTTPS and end with /api/v2")
-    if not str(CONFIG.get("client_token", "")).strip():
-        raise RuntimeError(f"client_token is missing in {CONFIG_FILE}")
+    client_token = str(CONFIG.get("client_token", "")).strip()
+    enrollment_token = str(CONFIG.get("enrollment_token", "")).strip()
+    if not client_token and not enrollment_token:
+        raise RuntimeError(
+            f"client_token or enrollment_token is missing in {CONFIG_FILE}"
+        )
     if len(str(CONFIG.get("display_name", "")).strip()) > 100:
         raise RuntimeError("display_name must not exceed 100 characters")
     roots = CONFIG.get("discovery", {}).get("allowed_certificate_roots", [])
@@ -179,6 +183,8 @@ def normalize_fingerprint(value):
 
 def load_identity():
     token = str(CONFIG.get("client_token", "")).strip()
+    if not token:
+        token = str(CONFIG.get("enrollment_token", "")).strip()
     machine_path = Path(CONFIG.get("machine_id_file", "/etc/machine-id"))
     if not machine_path.exists():
         raise RuntimeError(f"Machine ID file not found: {machine_path}")
@@ -193,6 +199,7 @@ def save_client_token(token):
     if not token:
         raise RuntimeError("CertM returned an empty client token")
     CONFIG["client_token"] = token
+    CONFIG.pop("enrollment_token", None)
     atomic_write(CONFIG_FILE, json.dumps(CONFIG, indent=2) + "\n", 0o600)
     log(f"Client token saved to {CONFIG_FILE}")
 

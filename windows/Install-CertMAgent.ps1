@@ -83,6 +83,16 @@ else {
     if ($PSBoundParameters.ContainsKey('DisplayName')) {
         $config.display_name = $DisplayName.Trim()
     }
+    $hasStoredClientToken = (
+        $config.PSObject.Properties.Name -contains 'client_token_protected' -and
+        -not [string]::IsNullOrWhiteSpace([string]$config.client_token_protected)
+    )
+    if (
+        $hasStoredClientToken -and
+        $config.PSObject.Properties.Name -contains 'enrollment_token_protected'
+    ) {
+        $config.PSObject.Properties.Remove('enrollment_token_protected')
+    }
     Write-Host 'Existing DPAPI-protected client identity preserved.'
 }
 $config | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
@@ -98,7 +108,7 @@ if (-not $EnableTask) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not disable the CertM scheduled task for staged validation.' }
 }
 
-Write-Host "CertM IIS Agent 1.0.0-rc.3 installed."
+Write-Host "CertM IIS Agent 1.0.0-rc.4 installed."
 Write-Host "Configuration: $configPath"
 if ($EnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"

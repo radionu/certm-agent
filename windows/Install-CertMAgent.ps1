@@ -110,7 +110,7 @@ if (-not $EnableTask) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not disable the CertM scheduled task for staged validation.' }
 }
 
-Write-Host "CertM IIS Agent 1.0.0-rc.5 installed."
+Write-Host "CertM IIS Agent 1.0.0-rc.7 installed."
 Write-Host "Configuration: $configPath"
 if ($EnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"

@@ -8,10 +8,12 @@ function Assert-True {
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $agentPath = Join-Path $repositoryRoot 'windows\CertM.Agent.ps1'
 $installerPath = Join-Path $repositoryRoot 'windows\Install-CertMAgent.ps1'
+$bootstrapPath = Join-Path $repositoryRoot 'windows\Bootstrap-CertMAgent.ps1'
 $configPath = Join-Path $repositoryRoot 'windows\config.example.json'
 
 $agent = Get-Content -LiteralPath $agentPath -Raw -Encoding UTF8
 $installer = Get-Content -LiteralPath $installerPath -Raw -Encoding UTF8
+$bootstrap = Get-Content -LiteralPath $bootstrapPath -Raw -Encoding UTF8
 $uninstaller = Get-Content -LiteralPath (Join-Path $repositoryRoot 'windows\Uninstall-CertMAgent.ps1') -Raw -Encoding UTF8
 $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
@@ -40,6 +42,20 @@ Assert-True ($agent -match "ValidateSet\('Run', 'Discover', 'Inventory', 'DryRun
     'The IIS agent must expose safe discovery and dry-run modes.'
 Assert-True ($installer -match 'Existing DPAPI-protected client identity preserved') `
     'The IIS upgrade path must preserve the existing client identity.'
+Assert-True ($bootstrap -match "Read-Host 'Enter the CertM operations bootstrap credential' -AsSecureString") `
+    'The one-command bootstrap must read its bootstrap credential without command-line exposure.'
+Assert-True ($bootstrap -notmatch '\[string\]\$EnrollmentToken') `
+    'The one-command bootstrap must not accept a plaintext enrollment token parameter.'
+Assert-True ($bootstrap -match '\[int\]\$IntervalMinutes\s*=\s*360') `
+    'The one-command bootstrap must default to the production six-hour interval.'
+Assert-True ($bootstrap -match 'RunOnce\s*=\s*\$true') `
+    'The one-command bootstrap must perform initial enrollment immediately.'
+Assert-True ($bootstrap -match 'EnableTask\s*=\s*-not\s+\$Staged') `
+    'The one-command bootstrap must enable automation unless staged mode is requested.'
+Assert-True ($bootstrap -match 'ZeroFreeBSTR') `
+    'The one-command bootstrap must clear the plaintext credential buffer.'
+Assert-True ($installer -match 'Copy-Item[^\r\n]+\$sourceUninstaller') `
+    'The installer must retain the uninstaller with the installed agent.'
 Assert-True ($installer -match '\[string\]\$DisplayName') `
     'The IIS installer must accept a friendly display name.'
 Assert-True ($agent -match 'hostname\s*=\s*\$env:COMPUTERNAME') `
@@ -70,7 +86,7 @@ Assert-True ($installer -match '\$root\s*=\s*''C:\\CertM''') `
     'The IIS installer root must be C:\CertM.'
 Assert-True ($uninstaller -match '\$root\s*=\s*''C:\\CertM''') `
     'The IIS uninstaller root must be C:\CertM.'
-Assert-True (($agent + $installer + $uninstaller) -notmatch 'ProgramData') `
+Assert-True (($agent + $installer + $bootstrap + $uninstaller) -notmatch 'ProgramData') `
     'Windows agent scripts must not use the obsolete ProgramData installation root.'
 
 Write-Host 'Windows agent contract validation passed.'

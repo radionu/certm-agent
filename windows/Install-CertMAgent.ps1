@@ -24,7 +24,9 @@ $root = 'C:\CertM'
 $bin = Join-Path $root 'bin'
 $configPath = Join-Path $root 'config.json'
 $sourceAgent = Join-Path $PSScriptRoot 'CertM.Agent.ps1'
+$sourceUninstaller = Join-Path $PSScriptRoot 'Uninstall-CertMAgent.ps1'
 if (-not (Test-Path -LiteralPath $sourceAgent)) { throw "Missing agent file: $sourceAgent" }
+if (-not (Test-Path -LiteralPath $sourceUninstaller)) { throw "Missing uninstaller file: $sourceUninstaller" }
 $existingConfiguration = Test-Path -LiteralPath $configPath
 
 if (-not $existingConfiguration -or $Force) {
@@ -43,6 +45,7 @@ New-Item -ItemType Directory -Path $bin -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $root 'logs') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $root 'staging') -Force | Out-Null
 Copy-Item -LiteralPath $sourceAgent -Destination (Join-Path $bin 'CertM.Agent.ps1') -Force
+Copy-Item -LiteralPath $sourceUninstaller -Destination (Join-Path $bin 'Uninstall-CertMAgent.ps1') -Force
 
 & icacls.exe $root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not secure the CertM data directory ACL.' }
@@ -123,7 +126,12 @@ if ($RunOnce) {
     }
     else {
         if (-not $existingConfiguration -or $Force) {
-            Write-Host 'Initial enrollment completed. Approve the new client in CertM before enabling the task.'
+            if ($EnableTask) {
+                Write-Host 'Initial enrollment completed. Approve the new client in CertM; the enabled task will retry automatically.'
+            }
+            else {
+                Write-Host 'Initial enrollment completed. Approve the new client in CertM before enabling the task.'
+            }
         }
         else {
             Write-Host 'Requested validation run completed with the existing client identity.'

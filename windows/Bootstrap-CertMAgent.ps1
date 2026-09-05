@@ -74,11 +74,15 @@ try {
 
     $installParameters = @{
         ApiBase = $ApiBase
-        DisplayName = $DisplayName
         IntervalMinutes = $IntervalMinutes
-        VerifyConnectHost = $VerifyConnectHost
         RunOnce = $true
         EnableTask = -not $Staged
+    }
+    if ($PSBoundParameters.ContainsKey('DisplayName')) {
+        $installParameters.DisplayName = $DisplayName
+    }
+    if ($PSBoundParameters.ContainsKey('VerifyConnectHost')) {
+        $installParameters.VerifyConnectHost = $VerifyConnectHost
     }
     if ($needsBootstrapCredential) {
         $installParameters.EnrollmentToken = $plainCredential

@@ -1,10 +1,14 @@
-# CertM nginx Agent 1.0.0-rc.4
+# CertM nginx Agent 1.0.0-rc.6
 
 Public pull-based API v2 agent for RHEL-family Linux and nginx.
 
 ## Dynamic discovery
 
 The agent runs `nginx -T` at the start of every `discover`, `inventory`, and `renew` operation. Domains and certificate paths are not stored in `agent.json`.
+
+Running the standalone `discover` command is optional. It is a read-only diagnostic command
+that prints what the agent currently sees. Installation runs a full `preflight`, and
+`preflight`, `inventory`, and `renew` perform their own fresh discovery automatically.
 
 `display_name` is an optional friendly server label. The agent always reports the current operating-system hostname separately on each inventory run, so renaming the host does not require re-enrollment while its machine ID and client token remain unchanged.
 
@@ -46,21 +50,42 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-The installer preserves the existing token, migrates a version 2 config to version 3, and removes obsolete static `management.bindings` data. Review `discovery.allowed_certificate_roots` after an upgrade.
+The installer first checks for root access, Python 3.8+, OpenSSL, nginx, systemd, a machine
+ID, an active nginx unit, and a valid `nginx -t`. It stops before creating CertM files or
+asking for an enrollment key if any prerequisite fails. On AlmaLinux/RHEL 8 with only the
+system Python 3.6, install a supported interpreter first:
+
+```bash
+sudo dnf install -y python39
+```
+
+The installer selects a Python 3.8+ executable and pins the installed agent shebang to it;
+`python3` does not need to be repointed system-wide. It then preserves or creates the
+configuration, installs the files, performs a full preflight, and enrolls a new client only
+after every local check and the read-only CertM API preflight succeed. The systemd timer
+remains disabled.
+
+During an upgrade the installer preserves the existing token, migrates a version 2 config
+to version 3, and removes obsolete static `management.bindings` data. Review
+`discovery.allowed_certificate_roots` after an upgrade.
 
 ## Commands
 
-Local discovery without changing certificates:
+Optional local discovery without contacting CertM or changing certificates:
 
 ```bash
 sudo /opt/certm-agent/certm-agent.py discover
 ```
 
-Validate the host and enroll or check identity:
+Repeat the full host validation and interactively enroll or check identity:
 
 ```bash
 sudo /opt/certm-agent/certm-agent.py preflight
 ```
+
+The full preflight checks Python, OpenSSL, nginx, `nginx -t`, the active systemd unit,
+machine ID, configuration permissions, every discovered certificate/key pair, writable
+certificate/config paths, the managed certificate directory, and CertM API reachability.
 
 Submit inventory only:
 

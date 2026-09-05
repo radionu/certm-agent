@@ -1,4 +1,4 @@
-# CertM nginx Agent 1.0.0-rc.6
+# CertM nginx Agent 1.0.0-rc.7
 
 Public pull-based API v2 agent for RHEL-family Linux and nginx.
 
@@ -44,9 +44,21 @@ Only config files below `discovery.allowed_config_roots` may be edited. The sour
 ## Install or upgrade
 
 ```bash
-git clone https://github.com/radionu/certm-agent.git
-cd certm-agent/rhel-nginx
-chmod +x install.sh
+sudo dnf install -y git
+sudo git clone https://github.com/radionu/certm-agent.git /opt/certm-agent-src
+cd /opt/certm-agent-src/rhel-nginx
+sudo ./install.sh
+```
+
+This is an unauthenticated HTTPS clone of the public repository. The server does not need
+a GitHub account, SSH key, personal access token, or saved Git credentials. The source
+checkout is intentionally separate from the installed runtime at `/opt/certm-agent`.
+
+Upgrade later from the same public checkout:
+
+```bash
+sudo git -C /opt/certm-agent-src pull --ff-only origin main
+cd /opt/certm-agent-src/rhel-nginx
 sudo ./install.sh
 ```
 
@@ -61,9 +73,11 @@ sudo dnf install -y python39
 
 The installer selects a Python 3.8+ executable and pins the installed agent shebang to it;
 `python3` does not need to be repointed system-wide. It then preserves or creates the
-configuration, installs the files, performs a full preflight, and enrolls a new client only
-after every local check and the read-only CertM API preflight succeed. The systemd timer
-remains disabled.
+configuration, asks for an optional `display_name` on a new installation, installs the
+files, performs a full preflight, and enrolls a new client only after every local check and
+the read-only CertM API preflight succeed. The systemd timer remains disabled. Every API
+request and inventory reports the running agent version so an existing client is updated
+on CertM immediately after an agent upgrade.
 
 During an upgrade the installer preserves the existing token, migrates a version 2 config
 to version 3, and removes obsolete static `management.bindings` data. Review

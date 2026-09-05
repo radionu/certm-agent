@@ -272,6 +272,8 @@ server {
 
         self.assertEqual(config["config_version"], 3)
         self.assertIn("display_name", config)
+        self.assertIn("enrollment_token", config)
+        self.assertEqual(config["client_token"], "")
         self.assertNotIn("management", config)
         self.assertNotIn("domains", config)
         self.assertTrue(config["discovery"]["allowed_certificate_roots"])
@@ -296,6 +298,25 @@ server {
         self.assertEqual(payload["hostname"], "edge-01")
         self.assertEqual(payload["display_name"], "Nginx Edge 01")
         self.assertEqual(payload["items"], [])
+
+    def test_saving_client_token_removes_bootstrap_enrollment_token(self):
+        previous_config = agent.CONFIG
+        previous_file = agent.CONFIG_FILE
+        with tempfile.TemporaryDirectory() as temporary:
+            agent.CONFIG = {
+                "enrollment_token": "abcd1234",
+                "client_token": "",
+            }
+            agent.CONFIG_FILE = Path(temporary) / "agent.json"
+            try:
+                agent.save_client_token("ct_unique_client_token")
+                saved = json.loads(agent.CONFIG_FILE.read_text())
+            finally:
+                agent.CONFIG = previous_config
+                agent.CONFIG_FILE = previous_file
+
+        self.assertEqual(saved["client_token"], "ct_unique_client_token")
+        self.assertNotIn("enrollment_token", saved)
 
 
 class NginxRenewPlanningTest(unittest.TestCase):

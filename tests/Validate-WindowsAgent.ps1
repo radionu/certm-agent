@@ -16,6 +16,8 @@ $uninstaller = Get-Content -LiteralPath (Join-Path $repositoryRoot 'windows\Unin
 $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
 Assert-True ($config.config_version -eq 3) 'Windows example config must use config_version=3.'
+Assert-True ($config.PSObject.Properties.Name -contains 'display_name') `
+    'Windows example config must expose an optional display_name.'
 Assert-True ($config.PSObject.Properties.Name -notcontains 'managed_domains') `
     'Windows example config must not contain managed_domains.'
 Assert-True ($agent -notmatch 'function\s+Test-DomainAllowed') `
@@ -28,12 +30,18 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.2'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.3'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match "ValidateSet\('Run', 'Discover', 'Inventory', 'DryRun'\)") `
     'The IIS agent must expose safe discovery and dry-run modes.'
 Assert-True ($installer -match 'Existing DPAPI-protected client identity preserved') `
     'The IIS upgrade path must preserve the existing client identity.'
+Assert-True ($installer -match '\[string\]\$DisplayName') `
+    'The IIS installer must accept a friendly display name.'
+Assert-True ($agent -match 'hostname\s*=\s*\$env:COMPUTERNAME') `
+    'The IIS agent must report the current OS hostname.'
+Assert-True ($agent -match 'display_name\s*=\s*\[string\]\$script:Config\.display_name') `
+    'The IIS agent must report its configured display name.'
 Assert-True ($installer -match '\[switch\]\$EnableTask') `
     'The IIS installer must require an explicit switch to enable its scheduled task.'
 Assert-True ($installer -match '\[switch\]\$RunOnce') `

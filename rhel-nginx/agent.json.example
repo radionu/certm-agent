@@ -3,7 +3,6 @@
   "api_base": "https://certm.pmr.vn/api/v2",
   "display_name": "",
   "enrollment_token": "PUT_ENROLLMENT_KEY_HERE",
-  "client_token": "",
   "machine_id_file": "/etc/machine-id",
   "service": {
     "type": "nginx",

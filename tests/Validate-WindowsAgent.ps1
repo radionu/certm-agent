@@ -70,7 +70,7 @@ Assert-True ($agent -match 'display_name\s*=\s*\[string\]\$script:Config\.displa
     'The IIS agent must report its configured display name.'
 Assert-True ($agent -match "'X-CertM-Agent-Type'\s*=\s*'iis'") `
     'Every IIS API request must report the agent type.'
-Assert-True ($agent -match "'X-CertM-Agent-Version'\s*=\s*\$script:AgentVersion") `
+Assert-True ($agent -match '''X-CertM-Agent-Version''\s*=\s*\$script:AgentVersion') `
     'Every IIS API request must report the running agent version.'
 Assert-True ($agent -match 'agent_version\s*=\s*\$script:AgentVersion') `
     'IIS inventory must report the running agent version.'

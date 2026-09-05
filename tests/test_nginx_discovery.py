@@ -271,11 +271,31 @@ server {
         config = json.loads(config_path.read_text())
 
         self.assertEqual(config["config_version"], 3)
+        self.assertIn("display_name", config)
         self.assertNotIn("management", config)
         self.assertNotIn("domains", config)
         self.assertTrue(config["discovery"]["allowed_certificate_roots"])
         self.assertTrue(config["discovery"]["allowed_config_roots"])
         self.assertEqual(config["paths"]["managed_certificate_root"], "/etc/certm/live")
+
+    def test_inventory_reports_current_hostname_and_display_name(self):
+        previous = agent.CONFIG
+        agent.CONFIG = {"display_name": "Nginx Edge 01"}
+        try:
+            with mock.patch.object(agent.socket, "gethostname", return_value="edge-01"), \
+                    mock.patch.object(
+                        agent,
+                        "api_request",
+                        return_value={"summary": {}},
+                    ) as request:
+                agent.push_inventory([], "token", "machine-id")
+        finally:
+            agent.CONFIG = previous
+
+        payload = request.call_args.args[4]
+        self.assertEqual(payload["hostname"], "edge-01")
+        self.assertEqual(payload["display_name"], "Nginx Edge 01")
+        self.assertEqual(payload["items"], [])
 
 
 class NginxRenewPlanningTest(unittest.TestCase):

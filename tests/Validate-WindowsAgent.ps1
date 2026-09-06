@@ -78,11 +78,11 @@ Assert-True ($agent -match 'site_state\s*=\s*\[string\]\$site\.State') `
     'IIS discovery must record whether each site is started or stopped.'
 Assert-True ($agent -match 'site_state\s*=\s*\$_\.site_state') `
     'IIS inventory must report the discovered site state.'
-Assert-True ($agent -match "if \(\$binding\.site_state -ne 'Started'\)") `
+Assert-True ($agent -match 'if \(\$binding\.site_state -ne ''Started''\)') `
     'IIS deployment must skip bindings that belong to inactive sites.'
 Assert-True ($agent -match 'Skip certificate deployment for inactive IIS site') `
     'IIS deployment must log every inactive binding that it skips.'
-Assert-True ($agent -match "if \(\$\_\.site_state -eq 'Started'\)") `
+Assert-True ($agent -match 'if \(\$_\.site_state -eq ''Started''\)') `
     'IIS inventory must not attempt live TLS verification for inactive sites.'
 Assert-True ($agent -match "Properties\.Remove\('enrollment_token_protected'\)") `
     'The IIS agent must remove the bootstrap credential after enrollment.'

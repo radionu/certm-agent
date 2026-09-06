@@ -77,7 +77,7 @@ The Windows agent:
 - creates a stable identity from the Windows `MachineGuid`;
 - uses the API v2 preflight, enrollment, approval, desired/download, inventory, and deployment-report flow;
 - protects enrollment and client tokens with Windows DPAPI (`LocalMachine` scope);
-- inventories IIS HTTPS/SNI bindings;
+- inventories IIS HTTPS/SNI bindings and reports whether each IIS site is started or stopped;
 - downloads a short-lived password-protected PFX package;
 - imports the leaf and chain into `LocalMachine\My` without an exportable private key;
 - updates only selected IIS bindings;
@@ -86,6 +86,11 @@ The Windows agent:
 - tracks `deployment_revision`, so a rebuilt package is applied even when the leaf fingerprint is unchanged.
 
 The current release skips HTTPS bindings without a host name because CertM v2 selects certificates by domain. It also skips IIS Central Certificate Store bindings rather than silently changing them to direct certificate bindings.
+
+Bindings from stopped or otherwise inactive IIS sites remain visible in inventory, but the
+agent does not download a certificate, change the binding, or attempt live TLS verification
+for them. Each skipped binding is recorded in the agent log. Once the site is started, the
+next scheduled run evaluates and deploys its desired certificate normally.
 
 ### Requirements
 

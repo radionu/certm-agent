@@ -36,7 +36,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.7'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.10'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -74,6 +74,16 @@ Assert-True ($agent -match '''X-CertM-Agent-Version''\s*=\s*\$script:AgentVersio
     'Every IIS API request must report the running agent version.'
 Assert-True ($agent -match 'agent_version\s*=\s*\$script:AgentVersion') `
     'IIS inventory must report the running agent version.'
+Assert-True ($agent -match 'site_state\s*=\s*\[string\]\$site\.State') `
+    'IIS discovery must record whether each site is started or stopped.'
+Assert-True ($agent -match 'site_state\s*=\s*\$_\.site_state') `
+    'IIS inventory must report the discovered site state.'
+Assert-True ($agent -match "if \(\$binding\.site_state -ne 'Started'\)") `
+    'IIS deployment must skip bindings that belong to inactive sites.'
+Assert-True ($agent -match 'Skip certificate deployment for inactive IIS site') `
+    'IIS deployment must log every inactive binding that it skips.'
+Assert-True ($agent -match "if \(\$\_\.site_state -eq 'Started'\)") `
+    'IIS inventory must not attempt live TLS verification for inactive sites.'
 Assert-True ($agent -match "Properties\.Remove\('enrollment_token_protected'\)") `
     'The IIS agent must remove the bootstrap credential after enrollment.'
 Assert-True ($installer -match "Properties\.Remove\('enrollment_token_protected'\)") `

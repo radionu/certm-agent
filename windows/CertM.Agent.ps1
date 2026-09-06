@@ -6,7 +6,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.7'
+$script:AgentVersion = '1.0.0-rc.10'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -172,6 +172,7 @@ function Get-IisHttpsBindings {
 
             $results += [pscustomobject]@{
                 site_name = $site.Name
+                site_state = [string]$site.State
                 domain = $domain
                 ip_address = $ipAddress
                 port = $port
@@ -198,9 +199,12 @@ function Send-Inventory {
     param([array]$Bindings, [string]$Token, [string]$MachineId)
     $items = @($Bindings | ForEach-Object {
         $servedFingerprint = $null
-        try { $servedFingerprint = Get-ServedFingerprint $_ } catch { }
+        if ($_.site_state -eq 'Started') {
+            try { $servedFingerprint = Get-ServedFingerprint $_ } catch { }
+        }
         [ordered]@{
             site_name = $_.site_name
+            site_state = $_.site_state
             domain = $_.domain
             port = $_.port
             protocol = $_.protocol
@@ -453,7 +457,7 @@ try {
     $bindings = @(Get-IisHttpsBindings)
     if ($Mode -eq 'Discover') {
         $bindings |
-            Select-Object site_name, domain, ip_address, port, protocol, binding_id, `
+            Select-Object site_name, site_state, domain, ip_address, port, protocol, binding_id, `
                 uses_central_certificate_store, store_name, thumbprint, `
                 fingerprint_sha256, not_after |
             ConvertTo-Json -Depth 6
@@ -528,7 +532,17 @@ try {
     }
 
     $plans = @()
+    $inactiveBindingCount = 0
     foreach ($binding in $bindings) {
+        if ($binding.site_state -ne 'Started') {
+            $inactiveBindingCount++
+            Write-CertMLog (
+                "Skip certificate deployment for inactive IIS site " +
+                "$($binding.site_name) state=$($binding.site_state): " +
+                "$($binding.binding_information)"
+            ) 'WARN'
+            continue
+        }
         if ($binding.uses_central_certificate_store) {
             Write-CertMLog "Skip IIS Central Certificate Store binding: $($binding.binding_id)" 'WARN'
             continue
@@ -557,7 +571,16 @@ try {
     }
 
     if ($plans.Count -eq 0) {
-        Write-CertMLog "Inventory sent; $($bindings.Count) IIS HTTPS binding(s) are current."
+        $activeBindingCount = $bindings.Count - $inactiveBindingCount
+        if ($inactiveBindingCount -gt 0) {
+            Write-CertMLog (
+                "Inventory sent; $activeBindingCount active IIS HTTPS binding(s) are current; " +
+                "$inactiveBindingCount inactive binding(s) were skipped."
+            )
+        }
+        else {
+            Write-CertMLog "Inventory sent; $($bindings.Count) IIS HTTPS binding(s) are current."
+        }
     }
     elseif ($Mode -eq 'DryRun') {
         Write-CertMLog "Dry run completed; planned $($plans.Count) IIS binding update(s)."

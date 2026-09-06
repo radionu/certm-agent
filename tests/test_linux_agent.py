@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import logging
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,10 +10,12 @@ from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-AGENT_PATH = REPOSITORY_ROOT / "rhel-nginx" / "certm-agent.py"
+AGENT_PATH = REPOSITORY_ROOT / "linux" / "certm-agent.py"
+sys.path.insert(0, str(AGENT_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("certm_nginx_agent", AGENT_PATH)
 agent = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(agent)
+from certm_agent import apache
 
 
 class NginxDiscoveryTest(unittest.TestCase):
@@ -299,7 +303,7 @@ server {
             self.discover(configuration)
 
     def test_example_config_has_no_static_domain_bindings(self):
-        config_path = REPOSITORY_ROOT / "rhel-nginx" / "agent.json.example"
+        config_path = REPOSITORY_ROOT / "linux" / "agent.json.example"
         config = json.loads(config_path.read_text())
 
         self.assertEqual(config["config_version"], 3)
@@ -413,6 +417,7 @@ class NginxRenewPlanningTest(unittest.TestCase):
         with mock.patch.object(agent, "validate_local_environment"), \
                 mock.patch.object(agent, "read_active_identity", return_value=("token", "machine")), \
                 mock.patch.object(agent, "discover_bindings", return_value=self.bindings), \
+                mock.patch.object(agent, "validate_reload_capacity"), \
                 mock.patch.object(agent, "push_inventory"), \
                 mock.patch.object(agent, "desired_for", side_effect=desired_values), \
                 mock.patch.object(agent, "deploy_group", return_value=False) as deploy, \
@@ -569,7 +574,7 @@ server {{
             _, _, bindings = self.fixture(temporary, same_server=True)
             old = self.configure(temporary)
             try:
-                with self.assertRaisesRegex(RuntimeError, "One nginx server block"):
+                with self.assertRaisesRegex(RuntimeError, "One nginx virtual host"):
                     agent.split_plan(
                         bindings,
                         [self.desired(10, "a" * 64), self.desired(11, "b" * 64)],
@@ -670,7 +675,7 @@ server {{
                         mock.patch.object(agent, "install_package", side_effect=install), \
                         mock.patch.object(
                             agent,
-                            "nginx_test_reload",
+                            "webserver_test_reload",
                             side_effect=[RuntimeError("nginx test failed"), None],
                         ), \
                         mock.patch.object(agent, "restore_selinux_context"), \
@@ -721,7 +726,7 @@ server {{
                         mock.patch.object(agent, "install_package", side_effect=install), \
                         mock.patch.object(agent, "fingerprint_file", side_effect=fingerprint), \
                         mock.patch.object(agent, "verify_served", side_effect=lambda _, expected: expected), \
-                        mock.patch.object(agent, "nginx_test_reload") as reload_nginx, \
+                        mock.patch.object(agent, "webserver_test_reload") as reload_webserver, \
                         mock.patch.object(agent, "restore_selinux_context"), \
                         mock.patch.object(agent, "report_deployment", return_value={"status": "ok"}) as report:
                     changed = agent.deploy_split_group(
@@ -739,7 +744,7 @@ server {{
             self.assertIn("certificate-11/fullchain.pem", rendered)
             self.assertTrue((Path(temporary) / "managed" / "certificate-10" / "privkey.pem").exists())
             self.assertTrue((Path(temporary) / "managed" / "certificate-11" / "privkey.pem").exists())
-            reload_nginx.assert_called_once()
+            reload_webserver.assert_called_once()
             self.assertEqual(report.call_count, 2)
 
 
@@ -792,7 +797,7 @@ class NginxDeploymentRollbackTest(unittest.TestCase):
                         mock.patch.object(agent, "install_package", side_effect=install_new_files), \
                         mock.patch.object(
                             agent,
-                            "nginx_test_reload",
+                            "webserver_test_reload",
                             side_effect=[RuntimeError("nginx reload failed"), None],
                         ), \
                         mock.patch.object(agent, "restore_selinux_context"), \
@@ -807,9 +812,194 @@ class NginxDeploymentRollbackTest(unittest.TestCase):
                 agent.CONFIG = old_config
 
 
+class ApacheDiscoveryAndDeploymentTest(unittest.TestCase):
+    def fixture(self, temporary, vhost_content):
+        root = Path(temporary)
+        config_root = root / "apache2"
+        sites = config_root / "sites-enabled"
+        ssl = root / "ssl"
+        sites.mkdir(parents=True)
+        ssl.mkdir()
+        main = config_root / "apache2.conf"
+        vhost = sites / "sites.conf"
+        main.write_text(f"IncludeOptional {sites}/*.conf\n")
+        vhost.write_text(vhost_content)
+
+        def run(command, **_kwargs):
+            if command[-1] == "-V":
+                output = (
+                    f'-D HTTPD_ROOT="{config_root}"\n'
+                    '-D SERVER_CONFIG_FILE="apache2.conf"\n'
+                )
+            elif "DUMP_INCLUDES" in command:
+                output = (
+                    "Included configuration files:\n"
+                    f"  (*) {main}\n"
+                    f"    (1) {vhost}\n"
+                )
+            else:
+                output = ""
+            return subprocess.CompletedProcess(command, 0, output, "")
+
+        config = {
+            "service": {"type": "apache"},
+            "discovery": {
+                "allowed_config_roots": [str(config_root)],
+                "allowed_certificate_roots": [str(root)],
+                "max_bindings": 1000,
+            },
+        }
+        return config, run, vhost, ssl
+
+    def test_discovers_debian_style_vhost_and_legacy_chain_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            content = f"""
+<VirtualHost *:443 [::]:443>
+    ServerName app.pmr.vn
+    ServerAlias www.app.pmr.vn *.ignored.pmr.vn
+    SSLEngine on
+    SSLCertificateFile {root}/ssl/cert.pem
+    SSLCertificateKeyFile {root}/ssl/key.pem
+    SSLCertificateChainFile {root}/ssl/chain.pem
+</VirtualHost>
+"""
+            config, run, _, _ = self.fixture(temporary, content)
+            bindings, warnings = apache.discover_apache_bindings(
+                config, run, "/usr/sbin/apache2ctl"
+            )
+
+        self.assertEqual(
+            [(item["domain"], item["port"]) for item in bindings],
+            [("app.pmr.vn", 443), ("www.app.pmr.vn", 443)],
+        )
+        self.assertTrue(all(item["binding_id"].startswith("apache:") for item in bindings))
+        self.assertTrue(all(item["chain_path"].endswith("chain.pem") for item in bindings))
+        self.assertTrue(any("*.ignored.pmr.vn" in warning for warning in warnings))
+
+    def test_rejects_same_certificate_paired_with_multiple_keys(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            content = f"""
+<VirtualHost *:443>
+    ServerName one.pmr.vn
+    SSLCertificateFile {root}/ssl/shared.pem
+    SSLCertificateKeyFile {root}/ssl/one.key
+</VirtualHost>
+<VirtualHost *:444>
+    ServerName two.pmr.vn
+    SSLCertificateFile {root}/ssl/shared.pem
+    SSLCertificateKeyFile {root}/ssl/two.key
+</VirtualHost>
+"""
+            config, run, _, _ = self.fixture(temporary, content)
+            with self.assertRaisesRegex(RuntimeError, "paired with multiple key paths"):
+                apache.discover_apache_bindings(config, run, "/usr/sbin/httpd")
+
+    def test_split_renderer_uses_fullchain_and_removes_legacy_chain_directive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            content = f"""
+<VirtualHost *:443>
+    ServerName app.pmr.vn
+    SSLCertificateFile {root}/ssl/cert.pem
+    SSLCertificateKeyFile {root}/ssl/key.pem
+    SSLCertificateChainFile {root}/ssl/chain.pem
+</VirtualHost>
+"""
+            config, run, vhost, _ = self.fixture(temporary, content)
+            bindings, _ = apache.discover_apache_bindings(config, run, "apachectl")
+            target = {
+                "paths": {
+                    "certificate_path": "/etc/certm/live/certificate-10/fullchain.pem",
+                    "key_path": "/etc/certm/live/certificate-10/privkey.pem",
+                },
+                "servers": [{"binding": bindings[0]}],
+            }
+            rendered = apache.render_apache_split_config_updates(
+                [target], config, agent.path_is_allowed
+            )[str(vhost.resolve())]
+
+        self.assertIn(
+            "SSLCertificateFile /etc/certm/live/certificate-10/fullchain.pem",
+            rendered,
+        )
+        self.assertIn(
+            "SSLCertificateKeyFile /etc/certm/live/certificate-10/privkey.pem",
+            rendered,
+        )
+        self.assertIn("# SSLCertificateChainFile removed", rendered)
+
+    def test_legacy_apache_chain_file_receives_leaf_and_chain_separately(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            certificate = root / "certificate.pem"
+            key = root / "privkey.pem"
+            chain = root / "chain.pem"
+            binding = {
+                "certificate_write_path": str(certificate),
+                "key_write_path": str(key),
+                "chain_write_path": str(chain),
+            }
+            package = {
+                "certificate": b"leaf",
+                "fullchain": b"leafchain",
+                "chain": b"intermediate",
+                "key": b"private",
+            }
+            previous = agent.CONFIG
+            agent.CONFIG = {"service": {"type": "apache"}}
+            try:
+                with mock.patch.object(agent, "restore_selinux_context"), \
+                        mock.patch.object(agent, "validate_cert_key"):
+                    agent.install_package([binding], package)
+            finally:
+                agent.CONFIG = previous
+
+            self.assertEqual(certificate.read_bytes(), b"leaf")
+            self.assertEqual(chain.read_bytes(), b"intermediate")
+            self.assertEqual(key.read_bytes(), b"private")
+
+
+class ReloadSafetyTest(unittest.TestCase):
+    def test_rejects_low_nofile_before_reload_on_large_server(self):
+        bindings = [{"domain": f"site-{index}.example.com"} for index in range(179)]
+        with mock.patch.object(agent, "service_main_pid", return_value=100), \
+                mock.patch.object(agent, "process_open_file_limit", return_value=(1024, 4096)), \
+                mock.patch.object(agent, "process_open_file_count", return_value=692):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"soft NOFILE=1024.*open_fds=692.*estimated_required=1050.*65536 recommended",
+            ):
+                agent.validate_reload_capacity(bindings)
+
+    def test_accepts_sufficient_nofile_headroom(self):
+        with mock.patch.object(agent, "service_main_pid", return_value=100), \
+                mock.patch.object(agent, "process_open_file_limit", return_value=(65536, 65536)), \
+                mock.patch.object(agent, "process_open_file_count", return_value=692):
+            result = agent.validate_reload_capacity([{}] * 179)
+        self.assertEqual(result["estimated_required"], 1050)
+
+    def test_reload_must_create_a_new_worker_generation(self):
+        with mock.patch.object(agent, "webserver_config_test"), \
+                mock.patch.object(agent, "service_main_pid", return_value=100), \
+                mock.patch.object(agent, "process_children", return_value={101, 102}), \
+                mock.patch.object(agent, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                mock.patch.object(agent.time, "monotonic", side_effect=[0, 11]):
+            with self.assertRaisesRegex(RuntimeError, "created no new worker process"):
+                agent.webserver_test_reload()
+
+    def test_reload_accepts_a_new_worker_generation(self):
+        with mock.patch.object(agent, "webserver_config_test"), \
+                mock.patch.object(agent, "service_main_pid", return_value=100), \
+                mock.patch.object(agent, "process_children", side_effect=[{101}, {201}]), \
+                mock.patch.object(agent, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+            agent.webserver_test_reload()
+
+
 class LinuxInstallAndPreflightTest(unittest.TestCase):
     def test_installer_checks_python_before_writing_and_runs_preflight_enrollment(self):
-        installer = (REPOSITORY_ROOT / "rhel-nginx" / "install.sh").read_text()
+        installer = (REPOSITORY_ROOT / "linux" / "install.sh").read_text()
 
         version_gate = installer.index("Python 3.8 or newer is required")
         first_install = installer.index("install -d -m 0750 /opt/certm-agent")
@@ -824,6 +1014,8 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
         )
         self.assertIn("Enter optional CertM display name", installer)
         self.assertIn("config.setdefault('display_name', '')", installer)
+        self.assertIn("systemd/web-server.conf", installer)
+        self.assertIn("previous_service_type", installer)
 
     def test_agent_rejects_python_older_than_38(self):
         with mock.patch.object(agent.os, "geteuid", return_value=0), \
@@ -835,7 +1027,9 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
         environment = {
             "python": "3.9.18",
             "openssl": "OpenSSL 1.1.1k",
-            "nginx": "nginx version: nginx/1.14.1",
+            "web_service": "nginx version: nginx/1.14.1",
+            "service_type": "nginx",
+            "control_binary": "/usr/sbin/nginx",
             "systemd_unit": "nginx",
             "machine_id_file": "/etc/machine-id",
         }
@@ -862,6 +1056,16 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
             return_value=discovered,
         ) as validate_discovered, mock.patch.object(
             agent,
+            "validate_reload_capacity",
+            return_value={
+                "main_pid": 123,
+                "soft_nofile": 65536,
+                "hard_nofile": 65536,
+                "open_fds": 100,
+                "estimated_required": 356,
+            },
+        ) as validate_capacity, mock.patch.object(
+            agent,
             "load_identity",
             return_value=("enrollment", "machine"),
         ), mock.patch.object(
@@ -886,6 +1090,7 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
         local.assert_called_once_with()
         discover.assert_called_once_with()
         validate_discovered.assert_called_once()
+        validate_capacity.assert_called_once()
         self.assertEqual(request.call_args_list[0].args[1], "/client/preflight")
         self.assertEqual(request.call_args_list[1].args[1], "/client/enroll")
         save.assert_called_once_with("ct_client_6")

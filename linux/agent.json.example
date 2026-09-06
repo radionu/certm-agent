@@ -6,7 +6,8 @@
   "machine_id_file": "/etc/machine-id",
   "service": {
     "type": "nginx",
-    "systemd_unit": "nginx"
+    "systemd_unit": "nginx",
+    "control_binary": "/usr/sbin/nginx"
   },
   "paths": {
     "backup_root": "/opt/certm-agent/bkup",

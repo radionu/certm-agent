@@ -311,10 +311,32 @@ sed "s|@WEB_SERVER_UNIT@|${SYSTEMD_UNIT}|g" \
   "${BASE_DIR}/systemd/web-server.conf" \
   > /etc/systemd/system/certm-agent.service.d/web-server.conf
 chmod 0644 /etc/systemd/system/certm-agent.service.d/web-server.conf
+
+NOFILE_FLOOR=4096
+CURRENT_SYSTEMD_NOFILE="$(
+  systemctl show "${SYSTEMD_UNIT}" --property=LimitNOFILE --value 2>/dev/null || true
+)"
+NOFILE_CHANGE_REQUIRED=1
+if [[ "${CURRENT_SYSTEMD_NOFILE}" == "infinity" ]]; then
+  NOFILE_CHANGE_REQUIRED=0
+elif [[ "${CURRENT_SYSTEMD_NOFILE}" =~ ^[0-9]+$ ]]; then
+  if [[ "${#CURRENT_SYSTEMD_NOFILE}" -gt 6 || "${CURRENT_SYSTEMD_NOFILE}" -ge "${NOFILE_FLOOR}" ]]; then
+    NOFILE_CHANGE_REQUIRED=0
+  fi
+fi
+if [[ "${NOFILE_CHANGE_REQUIRED}" -eq 1 ]]; then
+  install -d -m 0755 "/etc/systemd/system/${SYSTEMD_UNIT}.service.d"
+  install -m 0644 \
+    "${BASE_DIR}/systemd/nofile.conf" \
+    "/etc/systemd/system/${SYSTEMD_UNIT}.service.d/10-certm-nofile.conf"
+  echo "Configured persistent ${SYSTEMD_UNIT} LimitNOFILE floor: ${NOFILE_FLOOR}"
+else
+  echo "Existing ${SYSTEMD_UNIT} LimitNOFILE=${CURRENT_SYSTEMD_NOFILE}; no change required"
+fi
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.8 installed. Running full preflight before enrollment."
+echo "CertM Agent 1.0.0-rc.9 installed. Running full preflight before enrollment."
 /opt/certm-agent/certm-agent.py preflight --enroll
 echo
 echo "Installation and preflight completed."

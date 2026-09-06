@@ -962,23 +962,56 @@ class ApacheDiscoveryAndDeploymentTest(unittest.TestCase):
 
 
 class ReloadSafetyTest(unittest.TestCase):
-    def test_rejects_low_nofile_before_reload_on_large_server(self):
+    def test_live_nofile_raise_preserves_a_higher_hard_limit(self):
+        with mock.patch.object(agent.resource, "prlimit") as prlimit:
+            agent.raise_process_nofile(100, 1024, 65536, 4096)
+        prlimit.assert_called_once_with(
+            100,
+            agent.resource.RLIMIT_NOFILE,
+            (4096, 65536),
+        )
+
+    def test_raises_low_nofile_to_fixed_floor_without_blocking(self):
         bindings = [{"domain": f"site-{index}.example.com"} for index in range(179)]
         with mock.patch.object(agent, "service_main_pid", return_value=100), \
-                mock.patch.object(agent, "process_open_file_limit", return_value=(1024, 4096)), \
-                mock.patch.object(agent, "process_open_file_count", return_value=692):
-            with self.assertRaisesRegex(
-                RuntimeError,
-                r"soft NOFILE=1024.*open_fds=692.*estimated_required=1050.*65536 recommended",
-            ):
-                agent.validate_reload_capacity(bindings)
+                mock.patch.object(
+                    agent,
+                    "process_open_file_limit",
+                    side_effect=[(1024, 4096), (4096, 4096)],
+                ), \
+                mock.patch.object(agent, "process_open_file_count", return_value=692), \
+                mock.patch.object(agent, "raise_process_nofile") as raise_limit:
+            result = agent.validate_reload_capacity(bindings)
 
-    def test_accepts_sufficient_nofile_headroom(self):
+        raise_limit.assert_called_once_with(100, 1024, 4096, 4096)
+        self.assertTrue(result["adjusted"])
+        self.assertEqual(result["soft_nofile"], 4096)
+        self.assertEqual(result["configured_floor"], 4096)
+
+    def test_keeps_a_higher_existing_nofile_limit(self):
         with mock.patch.object(agent, "service_main_pid", return_value=100), \
                 mock.patch.object(agent, "process_open_file_limit", return_value=(65536, 65536)), \
-                mock.patch.object(agent, "process_open_file_count", return_value=692):
+                mock.patch.object(agent, "process_open_file_count", return_value=692), \
+                mock.patch.object(agent, "raise_process_nofile") as raise_limit:
             result = agent.validate_reload_capacity([{}] * 179)
-        self.assertEqual(result["estimated_required"], 1050)
+        raise_limit.assert_not_called()
+        self.assertFalse(result["adjusted"])
+        self.assertEqual(result["soft_nofile"], 65536)
+
+    def test_live_adjustment_failure_warns_but_does_not_block(self):
+        with mock.patch.object(agent, "service_main_pid", return_value=100), \
+                mock.patch.object(agent, "process_open_file_limit", return_value=(1024, 1024)), \
+                mock.patch.object(agent, "process_open_file_count", return_value=100), \
+                mock.patch.object(
+                    agent,
+                    "raise_process_nofile",
+                    side_effect=PermissionError("not permitted"),
+                ), \
+                mock.patch.object(agent, "warn") as warning:
+            result = agent.validate_reload_capacity([{}])
+        self.assertFalse(result["adjusted"])
+        self.assertIn("not permitted", result["adjustment_error"])
+        self.assertIn("Deployment will continue", warning.call_args.args[0])
 
     def test_reload_must_create_a_new_worker_generation(self):
         with mock.patch.object(agent, "webserver_config_test"), \
@@ -1015,6 +1048,8 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
         self.assertIn("Enter optional CertM display name", installer)
         self.assertIn("config.setdefault('display_name', '')", installer)
         self.assertIn("systemd/web-server.conf", installer)
+        self.assertIn("systemd/nofile.conf", installer)
+        self.assertIn("NOFILE_FLOOR=4096", installer)
         self.assertIn("previous_service_type", installer)
 
     def test_agent_rejects_python_older_than_38(self):
@@ -1059,10 +1094,13 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
             "validate_reload_capacity",
             return_value={
                 "main_pid": 123,
-                "soft_nofile": 65536,
-                "hard_nofile": 65536,
+                "soft_nofile": 4096,
+                "hard_nofile": 4096,
                 "open_fds": 100,
-                "estimated_required": 356,
+                "configured_floor": 4096,
+                "adjusted": False,
+                "adjustment_error": None,
+                "binding_count": 1,
             },
         ) as validate_capacity, mock.patch.object(
             agent,
@@ -1090,7 +1128,10 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
         local.assert_called_once_with()
         discover.assert_called_once_with()
         validate_discovered.assert_called_once()
-        validate_capacity.assert_called_once()
+        validate_capacity.assert_called_once_with(
+            [{"domain": "test.pmr.vn"}],
+            announce=True,
+        )
         self.assertEqual(request.call_args_list[0].args[1], "/client/preflight")
         self.assertEqual(request.call_args_list[1].args[1], "/client/enroll")
         save.assert_called_once_with("ct_client_6")

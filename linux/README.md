@@ -1,4 +1,4 @@
-# CertM Linux Agent 1.0.0-rc.8
+# CertM Linux Agent 1.0.0-rc.9
 
 One pull-based API v2 agent and installer for:
 
@@ -105,10 +105,13 @@ For modern Apache configurations, CertM writes a full chain to
 also supported; the leaf and chain files are updated separately until a config
 split is required, after which the managed fullchain form is used.
 
-Preflight also checks the running web-server master's `NOFILE` limit and current
-file-descriptor count. It blocks unsafe reloads and recommends `LimitNOFILE=65536`
-for large multi-vhost servers. After reload, the agent confirms a new worker
-generation was actually created instead of trusting a successful command exit.
+The installer configures a conservative systemd `LimitNOFILE` floor of `4096`
+only when the selected web server currently has a lower limit; it never lowers a
+higher existing value. Preflight attempts to raise the running master process to
+that floor without restarting the web server and records the result in the agent
+log. If the live adjustment cannot be applied, deployment still uses normal reload
+verification and complete rollback on failure. After reload, the agent confirms a
+new worker generation was actually created instead of trusting a successful exit.
 
 ## Files and logs
 

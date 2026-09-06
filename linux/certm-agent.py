@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import resource
 import shutil
 import socket
 import ssl
@@ -34,7 +35,8 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.8"
+AGENT_VERSION = "1.0.0-rc.9"
+NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
 LOGGER = logging.getLogger("certm-agent")
@@ -386,27 +388,67 @@ def process_open_file_count(pid):
     return len(list(Path(f"/proc/{pid}/fd").iterdir()))
 
 
-def validate_reload_capacity(bindings):
+def raise_process_nofile(pid, soft, hard, target):
+    if not hasattr(resource, "prlimit"):
+        raise RuntimeError("Python resource.prlimit is unavailable on this platform")
+    target_soft = max(int(soft), int(target))
+    if hard is None:
+        target_hard = resource.RLIM_INFINITY
+    else:
+        target_hard = max(int(hard), target_soft)
+    resource.prlimit(
+        int(pid),
+        resource.RLIMIT_NOFILE,
+        (target_soft, target_hard),
+    )
+
+
+def validate_reload_capacity(bindings, announce=False):
     pid = service_main_pid()
     soft, hard = process_open_file_limit(pid)
     open_count = process_open_file_count(pid)
-    headroom = max(256, len(bindings) * 2)
-    required = open_count + headroom
-    if soft is not None and soft < required:
-        recommended = max(4096, required * 2)
-        raise RuntimeError(
-            f"{service_unit()} MainPID={pid} soft NOFILE={soft} is too low for a safe "
-            f"reload; open_fds={open_count}, bindings={len(bindings)}, "
-            f"estimated_required={required}. Configure systemd LimitNOFILE to at least "
-            f"{recommended} (65536 recommended for large multi-vhost servers), restart "
-            "or raise the running master limit, then rerun preflight"
+    adjusted = False
+    adjustment_error = None
+    original_soft = soft
+    if soft is not None and soft < NOFILE_FLOOR:
+        try:
+            raise_process_nofile(pid, soft, hard, NOFILE_FLOOR)
+            soft, hard = process_open_file_limit(pid)
+            adjusted = soft is None or soft >= NOFILE_FLOOR
+            if not adjusted:
+                adjustment_error = (
+                    f"running limit remained {soft} after requesting {NOFILE_FLOOR}"
+                )
+        except Exception as exc:
+            adjustment_error = str(exc)
+        if adjusted:
+            log(
+                f"NOFILE adjusted live for {service_unit()} MainPID={pid}: "
+                f"{original_soft} -> {soft}; persistent systemd floor={NOFILE_FLOOR}; "
+                "no web-server restart was performed"
+            )
+        else:
+            warn(
+                f"NOFILE could not be adjusted live for {service_unit()} MainPID={pid}: "
+                f"current={original_soft}, requested={NOFILE_FLOOR}, error={adjustment_error}. "
+                "Deployment will continue with normal reload verification and rollback on failure"
+            )
+    elif announce:
+        log(
+            f"PREFLIGHT OK: Reload limit MainPID={pid}, "
+            f"NOFILE={'unlimited' if soft is None else soft}/"
+            f"{'unlimited' if hard is None else hard}, open_fds={open_count}, "
+            f"configured_floor={NOFILE_FLOOR}"
         )
     return {
         "main_pid": pid,
         "soft_nofile": "unlimited" if soft is None else soft,
         "hard_nofile": "unlimited" if hard is None else hard,
         "open_fds": open_count,
-        "estimated_required": required,
+        "configured_floor": NOFILE_FLOOR,
+        "adjusted": adjusted,
+        "adjustment_error": adjustment_error,
+        "binding_count": len(bindings),
     }
 
 
@@ -1929,7 +1971,7 @@ def preflight(auto_enroll=False):
     environment = validate_local_environment()
     bindings = discover_bindings()
     discovered = validate_discovered_environment(bindings)
-    reload_capacity = validate_reload_capacity(bindings)
+    validate_reload_capacity(bindings, announce=True)
     token, machine_id = load_identity()
     os_release = read_os_release()
     log(f"PREFLIGHT OK: CertM Agent version={AGENT_VERSION}")
@@ -1943,14 +1985,6 @@ def preflight(auto_enroll=False):
     log(f"PREFLIGHT OK: {environment['service_type']} configuration syntax is valid")
     log(f"PREFLIGHT OK: systemd unit {environment['systemd_unit']} is active")
     log(f"PREFLIGHT OK: Machine ID={environment['machine_id_file']}")
-    log(
-        "PREFLIGHT OK: Reload capacity "
-        f"MainPID={reload_capacity['main_pid']}, "
-        f"NOFILE={reload_capacity['soft_nofile']}/"
-        f"{reload_capacity['hard_nofile']}, "
-        f"open={reload_capacity['open_fds']}, "
-        f"estimated_required={reload_capacity['estimated_required']}"
-    )
     log(
         f"PREFLIGHT OK: Discovered bindings={len(bindings)}, "
         f"certificate/key pairs={discovered['certificate_pairs']}, "

@@ -4,42 +4,63 @@ Public pull-based deployment agents for CertM.
 
 Current release candidate implementations:
 
-- `rhel-nginx/` — native API v2 agent for RHEL-family Linux + nginx.
+- `linux/` — unified API v2 agent for nginx and Apache on Ubuntu, Debian,
+  RHEL, AlmaLinux, and Rocky Linux.
+- `rhel-nginx/` — compatibility wrapper for existing RC7 source checkouts.
 - `windows/` — native API v2 agent for Windows Server + IIS.
 
 This repository intentionally contains no enrollment keys, client tokens, private keys, production configuration, or CertM server-side source.
 
-## RHEL/nginx
+## Linux: nginx and Apache
+
+The repository is public. HTTPS clone requires no GitHub account, SSH key,
+personal access token, or stored Git credentials.
+
+On Ubuntu or Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+sudo git clone https://github.com/radionu/certm-agent.git /opt/certm-agent-src
+cd /opt/certm-agent-src/linux
+sudo ./install.sh
+```
+
+On RHEL, AlmaLinux, or Rocky Linux:
 
 ```bash
 sudo dnf install -y git
 sudo git clone https://github.com/radionu/certm-agent.git /opt/certm-agent-src
-cd /opt/certm-agent-src/rhel-nginx
+cd /opt/certm-agent-src/linux
 sudo ./install.sh
 ```
 
-The repository is public. The HTTPS clone requires no GitHub account, SSH key, personal
-access token, or stored Git credentials. Keep `/opt/certm-agent-src` as the public source
-checkout; the installed runtime is kept separately in `/opt/certm-agent`.
+The installer auto-detects nginx or Apache. If both are active, choose one:
+
+```bash
+sudo ./install.sh --web-server apache --display-name 'Apache Production 01'
+```
+
+Keep `/opt/certm-agent-src` as the source checkout; the installed runtime is
+separate in `/opt/certm-agent`.
 
 To upgrade an installed agent from the same public checkout:
 
 ```bash
 sudo git -C /opt/certm-agent-src pull --ff-only origin main
-cd /opt/certm-agent-src/rhel-nginx
+cd /opt/certm-agent-src/linux
 sudo ./install.sh
 ```
 
-The Linux installer requires Python 3.8 or newer. It validates Python, OpenSSL, nginx,
-systemd, machine ID, nginx syntax, discovered certificate/key pairs, local write paths, and
-CertM API reachability before enrollment. On AlmaLinux/RHEL 8, `python39` is supported and
-the installer uses it directly without changing the operating system's `python3` command.
+The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
+selected web server, systemd, machine ID, configuration syntax, certificate/key
+pairs, local write paths, reload capacity, and CertM API reachability before
+enrollment. On AlmaLinux/RHEL 8, `python39` is supported without changing the
+operating system's `python3` command.
 
-The nginx agent discovers current HTTPS vhosts from `nginx -T` on every run. The standalone
-`discover` command is optional and read-only; install/preflight and later inventory/renewal
-runs discover automatically. Its configuration contains safety roots, API identity,
-logging, and timeout settings, but no domain or binding list. See `rhel-nginx/README.md`
-before enabling the systemd timer.
+The agent discovers current HTTPS vhosts on every run. The standalone `discover`
+command is optional and read-only; preflight, inventory, and renewal discover
+automatically. See `linux/README.md` before enabling the systemd timer.
 
 Both agents support an optional `display_name` configuration value for a human-friendly server label. A new Linux installation asks for this value and always writes the field to `/etc/certm/agent.json`; upgrades add an empty field when an older configuration does not have it. The real operating-system hostname is reported independently on every inventory run. Changing a hostname therefore does not require re-enrollment as long as the machine ID and client token remain valid.
 

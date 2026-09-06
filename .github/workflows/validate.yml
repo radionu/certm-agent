@@ -14,11 +14,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Python and JSON syntax
         run: |
-          python3 -m py_compile rhel-nginx/certm-agent.py
-          python3 -m json.tool rhel-nginx/agent.json.example >/dev/null
+          python3 -m py_compile linux/certm-agent.py linux/certm_agent/*.py
+          python3 -m json.tool linux/agent.json.example >/dev/null
           python3 -m json.tool windows/config.example.json >/dev/null
+          bash -n linux/install.sh
           bash -n rhel-nginx/install.sh
-      - name: Run nginx discovery and safety tests
+      - name: Run Linux discovery and safety tests
         run: python3 -m unittest discover -s tests -v
 
   powershell-syntax:

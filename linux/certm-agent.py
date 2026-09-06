@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.7"
+AGENT_VERSION = "1.0.0-rc.8"
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
 LOGGER = logging.getLogger("certm-agent")
@@ -75,6 +75,42 @@ def warn(message):
     log(message, logging.WARNING)
 
 
+def service_type():
+    value = str(CONFIG.get("service", {}).get("type", "nginx")).strip().lower()
+    if value not in ("nginx", "apache"):
+        raise RuntimeError(f"Unsupported service.type: {value or 'empty'}")
+    return value
+
+
+def service_unit():
+    default = "nginx" if service_type() == "nginx" else "httpd"
+    value = str(CONFIG.get("service", {}).get("systemd_unit", default)).strip()
+    if not value:
+        raise RuntimeError("service.systemd_unit must not be empty")
+    return value
+
+
+def control_binary():
+    configured = str(CONFIG.get("service", {}).get("control_binary", "")).strip()
+    if configured:
+        return configured
+    if service_type() == "nginx":
+        return "nginx"
+    for candidate in ("apache2ctl", "apachectl", "httpd"):
+        if shutil.which(candidate):
+            return candidate
+    return "apachectl"
+
+
+def format_domains(domains, limit=8):
+    values = list(dict.fromkeys(str(item) for item in domains))
+    visible = values[:limit]
+    rendered = ", ".join(visible)
+    if len(values) > limit:
+        rendered += f", ... (+{len(values) - limit} more)"
+    return rendered
+
+
 def atomic_write(path, data, default_mode=0o600):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,7 +148,9 @@ def load_config(path):
         raise RuntimeError(f"Configuration file not found: {CONFIG_FILE}")
     CONFIG = json.loads(CONFIG_FILE.read_text())
     if int(CONFIG.get("config_version", 0)) != 3:
-        raise RuntimeError("CertM nginx agent 1.0 requires config_version=3")
+        raise RuntimeError("CertM Linux agent 1.0 requires config_version=3")
+    service_type()
+    service_unit()
     api_base = str(CONFIG.get("api_base", "")).rstrip("/")
     if not api_base.startswith("https://") or not api_base.endswith("/api/v2"):
         raise RuntimeError("api_base must use HTTPS and end with /api/v2")
@@ -132,13 +170,13 @@ def load_config(path):
             raise RuntimeError(f"Allowed certificate root must be absolute: {root}")
     config_roots = CONFIG.get("discovery", {}).get(
         "allowed_config_roots",
-        ["/etc/nginx"],
+        ["/etc/nginx"] if service_type() == "nginx" else ["/etc/httpd", "/etc/apache2"],
     )
     if not isinstance(config_roots, list) or not config_roots:
         raise RuntimeError("discovery.allowed_config_roots must not be empty")
     for root in config_roots:
         if not Path(str(root)).is_absolute():
-            raise RuntimeError(f"Allowed nginx config root must be absolute: {root}")
+            raise RuntimeError(f"Allowed web-server config root must be absolute: {root}")
     managed_root = Path(
         CONFIG.get("paths", {}).get(
             "managed_certificate_root",
@@ -225,7 +263,7 @@ def api_request(method, path, token, machine_id, payload=None, query=None):
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {token}",
-        "X-CertM-Agent-Type": "nginx",
+        "X-CertM-Agent-Type": service_type(),
         "X-CertM-Agent-Version": AGENT_VERSION,
         "X-CertM-Machine-ID": machine_id,
         "User-Agent": f"CertM-Agent/{AGENT_VERSION}",
@@ -265,19 +303,23 @@ def validate_local_environment():
         raise RuntimeError("CertM agent must run as root")
     if sys.version_info < (3, 8):
         raise RuntimeError("Python 3.8 or newer is required")
-    for command in ("openssl", "nginx", "systemctl"):
+    control = control_binary()
+    for command in ("openssl", control, "systemctl"):
         if shutil.which(command) is None:
             raise RuntimeError(f"Required command not found: {command}")
     openssl = run(["openssl", "version"], check=False)
     if openssl.returncode != 0:
         raise RuntimeError("openssl version failed")
-    nginx = run(["nginx", "-v"], check=False)
-    if nginx.returncode != 0:
-        raise RuntimeError("nginx -v failed")
-    run(["nginx", "-t"], timeout=60)
-    unit = str(CONFIG.get("service", {}).get("systemd_unit", "nginx")).strip()
-    if not unit:
-        raise RuntimeError("service.systemd_unit must not be empty")
+    if service_type() == "nginx":
+        web_service = run([control, "-v"], check=False)
+        test_command = [control, "-t"]
+    else:
+        web_service = run([control, "-v"], check=False)
+        test_command = [control, "configtest"]
+    if web_service.returncode != 0:
+        raise RuntimeError(f"{control} version check failed")
+    run(test_command, timeout=60)
+    unit = service_unit()
     loaded = run(
         ["systemctl", "show", unit, "--property=LoadState", "--value"],
         check=False,
@@ -301,25 +343,91 @@ def validate_local_environment():
             f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         ),
         "openssl": (openssl.stdout or openssl.stderr).strip(),
-        "nginx": (nginx.stderr or nginx.stdout).strip(),
+        "web_service": (web_service.stderr or web_service.stdout).strip(),
+        "service_type": service_type(),
+        "control_binary": control,
         "systemd_unit": unit,
         "machine_id_file": str(machine_path),
     }
 
 
+def process_open_file_limit(pid):
+    limits = Path(f"/proc/{pid}/limits")
+    if not limits.is_file():
+        raise RuntimeError(f"Cannot read running service limits: {limits}")
+    for line in limits.read_text(errors="replace").splitlines():
+        if line.startswith("Max open files"):
+            values = line.split()
+            if len(values) >= 5:
+                soft = values[3]
+                hard = values[4]
+                return (
+                    None if soft == "unlimited" else int(soft),
+                    None if hard == "unlimited" else int(hard),
+                )
+    raise RuntimeError(f"Max open files limit is missing from {limits}")
+
+
+def service_main_pid():
+    result = run(
+        ["systemctl", "show", service_unit(), "--property=MainPID", "--value"],
+        check=False,
+    )
+    try:
+        pid = int(result.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"Cannot determine MainPID for {service_unit()}") from exc
+    if result.returncode != 0 or pid < 1 or not Path(f"/proc/{pid}").is_dir():
+        raise RuntimeError(f"Invalid MainPID for active service {service_unit()}: {pid}")
+    return pid
+
+
+def process_open_file_count(pid):
+    return len(list(Path(f"/proc/{pid}/fd").iterdir()))
+
+
+def validate_reload_capacity(bindings):
+    pid = service_main_pid()
+    soft, hard = process_open_file_limit(pid)
+    open_count = process_open_file_count(pid)
+    headroom = max(256, len(bindings) * 2)
+    required = open_count + headroom
+    if soft is not None and soft < required:
+        recommended = max(4096, required * 2)
+        raise RuntimeError(
+            f"{service_unit()} MainPID={pid} soft NOFILE={soft} is too low for a safe "
+            f"reload; open_fds={open_count}, bindings={len(bindings)}, "
+            f"estimated_required={required}. Configure systemd LimitNOFILE to at least "
+            f"{recommended} (65536 recommended for large multi-vhost servers), restart "
+            "or raise the running master limit, then rerun preflight"
+        )
+    return {
+        "main_pid": pid,
+        "soft_nofile": "unlimited" if soft is None else soft,
+        "hard_nofile": "unlimited" if hard is None else hard,
+        "open_fds": open_count,
+        "estimated_required": required,
+    }
+
+
 def validate_discovered_environment(bindings):
     if not bindings:
-        raise RuntimeError("No concrete nginx HTTPS bindings were discovered")
+        raise RuntimeError(
+            f"No concrete {service_type()} HTTPS bindings were discovered"
+        )
     pairs = {}
     config_files = set()
     for binding in bindings:
         certificate = Path(binding["certificate_write_path"])
         key = Path(binding["key_write_path"])
-        pairs.setdefault((str(certificate), str(key)), binding)
+        pairs.setdefault(
+            (str(certificate), str(key), binding.get("chain_write_path")),
+            binding,
+        )
         source = binding.get("config_file")
         if source:
             config_files.add(str(Path(source).resolve(strict=False)))
-    for (certificate_value, key_value), binding in pairs.items():
+    for (certificate_value, key_value, _chain_value), binding in pairs.items():
         certificate = Path(certificate_value)
         key = Path(key_value)
         if not certificate.is_file():
@@ -340,10 +448,17 @@ def validate_discovered_environment(bindings):
             raise RuntimeError(f"Private-key directory is not writable: {key.parent}")
         fingerprint_file(certificate)
         validate_cert_key(certificate, key)
+        chain_value = binding.get("chain_write_path")
+        if chain_value:
+            chain = Path(chain_value)
+            if not chain.is_file() or not os.access(chain, os.R_OK):
+                raise RuntimeError(f"Configured certificate chain is missing or unreadable: {chain}")
+            if not os.access(chain.parent, os.W_OK):
+                raise RuntimeError(f"Certificate-chain directory is not writable: {chain.parent}")
     for source_value in config_files:
         source = Path(source_value)
         if not source.is_file() or not os.access(source, os.R_OK | os.W_OK):
-            raise RuntimeError(f"nginx config file is not readable and writable: {source}")
+            raise RuntimeError(f"Web-server config file is not readable and writable: {source}")
     managed_root = Path(
         CONFIG.get("paths", {}).get("managed_certificate_root", "/etc/certm/live")
     )
@@ -356,7 +471,7 @@ def validate_discovered_environment(bindings):
 
 
 def nginx_dump():
-    result = run(["nginx", "-T"], timeout=60)
+    result = run([control_binary(), "-T"], timeout=60)
     if "# configuration file " in result.stdout:
         return result.stdout
     if "# configuration file " in result.stderr:
@@ -368,7 +483,7 @@ def nginx_dump():
 
 
 def nginx_prefix():
-    result = run(["nginx", "-V"], check=False)
+    result = run([control_binary(), "-V"], check=False)
     text = result.stderr + " " + result.stdout
     match = re.search(r"(?:^|\s)--prefix=([^\s]+)", text)
     return Path(match.group(1)) if match else Path("/")
@@ -616,9 +731,9 @@ def path_is_allowed(path, roots):
 
 def make_binding_id(domain, port, certificate_path, key_path):
     digest = hashlib.sha256(
-        f"nginx\0{domain}\0{port}\0{certificate_path}\0{key_path}".encode()
+        f"{service_type()}\0{domain}\0{port}\0{certificate_path}\0{key_path}".encode()
     ).hexdigest()[:20]
-    return f"nginx:{domain}:{port}:{digest}"
+    return f"{service_type()}:{domain}:{port}:{digest}"
 
 
 def bindings_from_dump(text, prefix, allowed_roots, max_bindings=1000):
@@ -761,7 +876,7 @@ def bindings_from_dump(text, prefix, allowed_roots, max_bindings=1000):
     return bindings, warnings
 
 
-def discover_bindings():
+def discover_nginx_bindings():
     discovery = CONFIG.get("discovery", {})
     bindings, warnings = bindings_from_dump(
         nginx_dump(),
@@ -772,6 +887,18 @@ def discover_bindings():
     for message in warnings:
         warn(message)
     log(f"Discovered {len(bindings)} concrete nginx HTTPS binding(s)")
+    return bindings
+
+
+def discover_bindings():
+    if service_type() == "nginx":
+        return discover_nginx_bindings()
+    from certm_agent.apache import discover_apache_bindings
+
+    bindings, warnings = discover_apache_bindings(CONFIG, run, control_binary())
+    for message in warnings:
+        warn(message)
+    log(f"Discovered {len(bindings)} concrete apache HTTPS binding(s)")
     return bindings
 
 
@@ -935,10 +1062,21 @@ def decode_package(response, desired, domains):
             raise RuntimeError("fullchain.pem does not start with the downloaded leaf certificate")
     return {
         "deployment_id": deployment_id,
+        "certificate": certificate,
         "fullchain": fullchain,
+        "chain": certificate_chain_tail(fullchain),
         "key": key,
         "expected": expected,
     }
+
+
+def certificate_chain_tail(fullchain):
+    blocks = re.findall(
+        rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----[\r\n]*",
+        fullchain,
+        flags=re.DOTALL,
+    )
+    return b"".join(blocks[1:])
 
 
 def restore_selinux_context(paths):
@@ -949,7 +1087,8 @@ def restore_selinux_context(paths):
 def group_id(bindings):
     first = bindings[0]
     return hashlib.sha256(
-        f"{first['certificate_write_path']}\0{first['key_write_path']}".encode()
+        f"{first['certificate_write_path']}\0{first['key_write_path']}\0"
+        f"{first.get('chain_write_path') or ''}".encode()
     ).hexdigest()[:20]
 
 
@@ -970,6 +1109,8 @@ def create_backup(bindings):
         "key_path": str(key),
         "certificate_backup": None,
         "key_backup": None,
+        "chain_path": first.get("chain_write_path"),
+        "chain_backup": None,
     }
     if certificate.exists():
         destination = target / "certificate.pem"
@@ -979,6 +1120,12 @@ def create_backup(bindings):
         destination = target / "privkey.pem"
         shutil.copy2(key, destination)
         manifest["key_backup"] = str(destination)
+    if first.get("chain_write_path"):
+        chain = Path(first["chain_write_path"])
+        if chain.exists():
+            destination = target / "chain.pem"
+            shutil.copy2(chain, destination)
+            manifest["chain_backup"] = str(destination)
     atomic_write(target / "manifest.json", json.dumps(manifest, indent=2) + "\n", 0o600)
     return target, manifest
 
@@ -987,7 +1134,10 @@ def restore_backup(manifest):
     for path_key, backup_key, mode in (
         ("certificate_path", "certificate_backup", 0o644),
         ("key_path", "key_backup", 0o600),
+        ("chain_path", "chain_backup", 0o644),
     ):
+        if not manifest.get(path_key):
+            continue
         path = Path(manifest[path_key])
         backup = manifest.get(backup_key)
         if backup:
@@ -997,16 +1147,35 @@ def restore_backup(manifest):
                 path.unlink()
             except FileNotFoundError:
                 pass
-    restore_selinux_context((manifest["certificate_path"], manifest["key_path"]))
+    restore_selinux_context(
+        [
+            value
+            for value in (
+                manifest.get("certificate_path"),
+                manifest.get("key_path"),
+                manifest.get("chain_path"),
+            )
+            if value
+        ]
+    )
 
 
 def install_package(bindings, package):
     first = bindings[0]
     certificate = Path(first["certificate_write_path"])
     key = Path(first["key_write_path"])
-    atomic_write(certificate, package["fullchain"], 0o644)
+    chain_value = first.get("chain_write_path")
+    if service_type() == "apache" and chain_value:
+        if not package["chain"]:
+            raise RuntimeError("Apache configuration requires a chain file but package has no chain")
+        atomic_write(certificate, package["certificate"], 0o644)
+        atomic_write(Path(chain_value), package["chain"], 0o644)
+    else:
+        atomic_write(certificate, package["fullchain"], 0o644)
     atomic_write(key, package["key"], 0o600)
-    restore_selinux_context((certificate, key))
+    restore_selinux_context(
+        [certificate, key] + ([Path(chain_value)] if chain_value else [])
+    )
     validate_cert_key(certificate, key)
 
 
@@ -1130,7 +1299,7 @@ def push_inventory(bindings, token, machine_id):
         token,
         machine_id,
         {
-            "service": "nginx",
+            "service": service_type(),
             "hostname": socket.gethostname(),
             "display_name": str(CONFIG.get("display_name", "")).strip(),
             "agent_version": AGENT_VERSION,
@@ -1144,7 +1313,11 @@ def push_inventory(bindings, token, machine_id):
 def binding_groups(bindings):
     groups = {}
     for binding in bindings:
-        key = (binding["certificate_write_path"], binding["key_write_path"])
+        key = (
+            binding["certificate_write_path"],
+            binding["key_write_path"],
+            binding.get("chain_write_path"),
+        )
         groups.setdefault(key, []).append(binding)
     return [groups[key] for key in sorted(groups)]
 
@@ -1186,7 +1359,8 @@ def split_plan(bindings, desired_values):
         server_id = binding.get("config_server_id")
         if not server_id:
             raise RuntimeError(
-                f"Cannot locate nginx server block for {binding['domain']}:{binding['port']}"
+                f"Cannot locate {service_type()} virtual host for "
+                f"{binding['domain']}:{binding['port']}"
             )
         item = servers.setdefault(
             server_id,
@@ -1206,10 +1380,15 @@ def split_plan(bindings, desired_values):
         }
         if len(identities) != 1:
             domains = sorted({binding["domain"] for binding in item["bindings"]})
+            split_hint = (
+                "Split these server_name values into separate server blocks first"
+                if service_type() == "nginx"
+                else "Split these ServerName/ServerAlias values into separate VirtualHost blocks first"
+            )
             raise RuntimeError(
-                "One nginx server block cannot use different CertM assignments: "
+                f"One {service_type()} virtual host cannot use different CertM assignments: "
                 + ", ".join(domains)
-                + ". Split these server_name values into separate server blocks first"
+                + f". {split_hint}"
             )
         item["desired"] = item["desired"][0]
 
@@ -1273,7 +1452,7 @@ def nginx_directive_replacement(binding, start_key, end_key, replacement):
     return start, end, replacement
 
 
-def render_split_config_updates(targets):
+def render_nginx_split_config_updates(targets):
     changes = {}
     allowed_roots = CONFIG.get("discovery", {}).get(
         "allowed_config_roots",
@@ -1362,6 +1541,14 @@ def render_split_config_updates(targets):
     return rendered
 
 
+def render_split_config_updates(targets):
+    if service_type() == "nginx":
+        return render_nginx_split_config_updates(targets)
+    from certm_agent.apache import render_apache_split_config_updates
+
+    return render_apache_split_config_updates(targets, CONFIG, path_is_allowed)
+
+
 def create_file_set_backup(bindings, paths):
     root = Path(CONFIG.get("paths", {}).get("backup_root", "/opt/certm-agent/bkup"))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1431,13 +1618,40 @@ def public_binding(binding):
     return {field: binding[field] for field in fields}
 
 
-def nginx_test_reload():
-    run(["nginx", "-t"])
-    unit = str(CONFIG.get("service", {}).get("systemd_unit", "nginx"))
+def webserver_config_test():
+    control = control_binary()
+    command = [control, "-t"] if service_type() == "nginx" else [control, "configtest"]
+    run(command, timeout=60)
+
+
+def process_children(pid):
+    path = Path(f"/proc/{pid}/task/{pid}/children")
+    if not path.is_file():
+        return set()
+    return {int(value) for value in path.read_text().split() if value.isdigit()}
+
+
+def webserver_test_reload():
+    webserver_config_test()
+    unit = service_unit()
+    main_pid = service_main_pid()
+    before = process_children(main_pid)
     run(["systemctl", "reload", unit])
     active = run(["systemctl", "is-active", "--quiet", unit], check=False)
     if active.returncode != 0:
-        raise RuntimeError(f"nginx systemd unit is not active after reload: {unit}")
+        raise RuntimeError(f"Web-server systemd unit is not active after reload: {unit}")
+    if before:
+        deadline = time.monotonic() + 10
+        after = process_children(main_pid)
+        while not (after - before) and time.monotonic() < deadline:
+            time.sleep(0.25)
+            after = process_children(main_pid)
+        if not (after - before):
+            raise RuntimeError(
+                f"{unit} reload returned success but created no new worker process; "
+                "the running master likely rejected reconfiguration. Check the global "
+                "web-server error log and NOFILE limit"
+            )
 
 
 def deploy_group(bindings, desired, token, machine_id, dry_run=False):
@@ -1459,7 +1673,10 @@ def deploy_group(bindings, desired, token, machine_id, dry_run=False):
                 for binding in bindings:
                     save_state(binding, desired, expected)
                 note = "state refreshed" if not states_current else "already current"
-            log(f"Group {group_id(bindings)} {note} and verified for {', '.join(domains)}")
+            log(
+                f"Group {group_id(bindings)} {note} and verified for "
+                f"{format_domains(domains)}"
+            )
             return False
         except Exception as exc:
             warn(f"Local certificate matches but served verification failed; redeploying: {exc}")
@@ -1467,7 +1684,7 @@ def deploy_group(bindings, desired, token, machine_id, dry_run=False):
     if dry_run:
         log(
             f"DRY RUN would deploy {revision} to group {group_id(bindings)} "
-            f"for {', '.join(domains)}"
+            f"for {format_domains(domains)}"
         )
         return False
 
@@ -1479,17 +1696,21 @@ def deploy_group(bindings, desired, token, machine_id, dry_run=False):
         machine_id,
         query={
             "domain": representative["domain"],
-            "service": "nginx",
+            "service": service_type(),
             "port": int(representative["port"]),
         },
     )
     package = decode_package(response, desired, domains)
     deployment_id = package["deployment_id"]
     _, manifest = create_backup(bindings)
-    complete_backup = bool(manifest["certificate_backup"] and manifest["key_backup"])
+    complete_backup = bool(
+        manifest["certificate_backup"]
+        and manifest["key_backup"]
+        and (not manifest.get("chain_path") or manifest.get("chain_backup"))
+    )
     try:
         install_package(bindings, package)
-        nginx_test_reload()
+        webserver_test_reload()
         installed = fingerprint_file(certificate_path)
         if installed != expected:
             raise RuntimeError("Installed fingerprint does not match desired certificate")
@@ -1502,21 +1723,25 @@ def deploy_group(bindings, desired, token, machine_id, dry_run=False):
             installed=installed,
             served=served_values[-1],
             message=(
-                f"Certificate installed, nginx reloaded and {len(bindings)} binding(s) verified"
+                f"Certificate installed, {service_type()} reloaded and "
+                f"{len(bindings)} binding(s) verified"
             ),
         )
         if report.get("status") != "ok":
             raise RuntimeError(f"CertM rejected SUCCESS report: {report}")
         for binding in bindings:
             save_state(binding, desired, expected)
-        log(f"CERTIFICATE UPDATE SUCCESSFUL: {revision} for {', '.join(domains)}")
+        log(
+            f"CERTIFICATE UPDATE SUCCESSFUL: {revision} for "
+            f"{format_domains(domains)}"
+        )
         return True
     except Exception as exc:
         failure = str(exc)
         if complete_backup:
             try:
                 restore_backup(manifest)
-                nginx_test_reload()
+                webserver_test_reload()
                 rollback_text = "Rollback completed successfully"
             except Exception as rollback_exc:
                 rollback_text = f"Rollback failed: {rollback_exc}"
@@ -1544,20 +1769,20 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
         domains = sorted({binding["domain"] for binding in target["bindings"]})
         paths = target["paths"]
         log(
-            f"{'DRY RUN would split' if dry_run else 'Splitting'} nginx config for "
-            f"{', '.join(domains)} -> {paths['certificate_path']}"
+            f"{'DRY RUN would split' if dry_run else 'Splitting'} {service_type()} config for "
+            f"{format_domains(domains)} -> {paths['certificate_path']}"
         )
     if untouched:
         domains = sorted({binding["domain"] for binding in untouched})
         log(
             "No CertM assignment for "
-            + ", ".join(domains)
-            + "; their current nginx paths will remain unchanged"
+            + format_domains(domains)
+            + f"; their current {service_type()} paths will remain unchanged"
         )
     config_updates = render_split_config_updates(targets)
     if dry_run:
         log(
-            "DRY RUN validated nginx config edits for: "
+            f"DRY RUN validated {service_type()} config edits for: "
             + ", ".join(sorted(config_updates))
         )
         return False
@@ -1575,7 +1800,7 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
                 machine_id,
                 query={
                     "domain": representative["domain"],
-                    "service": "nginx",
+                    "service": service_type(),
                     "port": int(representative["port"]),
                 },
             )
@@ -1606,7 +1831,7 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
         for path, content in config_updates.items():
             atomic_write(path, content)
         restore_selinux_context(config_updates)
-        nginx_test_reload()
+        webserver_test_reload()
 
         for deployment in deployments:
             target = deployment["target"]
@@ -1634,7 +1859,8 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
                 installed=deployment["installed"],
                 served=deployment["served"],
                 message=(
-                    "Certificate installed, nginx config split, nginx reloaded and "
+                    f"Certificate installed, {service_type()} config split, "
+                    f"{service_type()} reloaded and "
                     f"{len(deployment['bindings'])} binding(s) verified"
                 ),
             )
@@ -1645,7 +1871,7 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
                 save_state(binding, target["desired"], expected)
             log(
                 "CERTIFICATE UPDATE SUCCESSFUL: "
-                f"{target['desired']['deployment_revision']} for {', '.join(domains)}"
+                f"{target['desired']['deployment_revision']} for {format_domains(domains)}"
             )
         return True
     except Exception as exc:
@@ -1653,7 +1879,7 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
         if local_changes_started and manifest is not None:
             try:
                 restore_file_set(manifest)
-                nginx_test_reload()
+                webserver_test_reload()
                 rollback_text = "Config and certificate rollback completed successfully"
             except Exception as rollback_exc:
                 rollback_text = f"Rollback failed: {rollback_exc}"
@@ -1692,7 +1918,7 @@ def enrollment_payload(os_release):
         "machine_id": machine_id,
         "hostname": socket.gethostname(),
         "display_name": str(CONFIG.get("display_name", "")).strip(),
-        "agent_type": "nginx",
+        "agent_type": service_type(),
         "agent_version": AGENT_VERSION,
         "os_name": os_release.get("id") or os_release.get("name") or "linux",
         "os_version": os_release.get("version_id") or "",
@@ -1703,6 +1929,7 @@ def preflight(auto_enroll=False):
     environment = validate_local_environment()
     bindings = discover_bindings()
     discovered = validate_discovered_environment(bindings)
+    reload_capacity = validate_reload_capacity(bindings)
     token, machine_id = load_identity()
     os_release = read_os_release()
     log(f"PREFLIGHT OK: CertM Agent version={AGENT_VERSION}")
@@ -1712,10 +1939,18 @@ def preflight(auto_enroll=False):
     )
     log(f"PREFLIGHT OK: Python={environment['python']} (minimum 3.8)")
     log(f"PREFLIGHT OK: OpenSSL={environment['openssl']}")
-    log(f"PREFLIGHT OK: Web service={environment['nginx']}")
-    log("PREFLIGHT OK: nginx configuration syntax is valid")
+    log(f"PREFLIGHT OK: Web service={environment['web_service']}")
+    log(f"PREFLIGHT OK: {environment['service_type']} configuration syntax is valid")
     log(f"PREFLIGHT OK: systemd unit {environment['systemd_unit']} is active")
     log(f"PREFLIGHT OK: Machine ID={environment['machine_id_file']}")
+    log(
+        "PREFLIGHT OK: Reload capacity "
+        f"MainPID={reload_capacity['main_pid']}, "
+        f"NOFILE={reload_capacity['soft_nofile']}/"
+        f"{reload_capacity['hard_nofile']}, "
+        f"open={reload_capacity['open_fds']}, "
+        f"estimated_required={reload_capacity['estimated_required']}"
+    )
     log(
         f"PREFLIGHT OK: Discovered bindings={len(bindings)}, "
         f"certificate/key pairs={discovered['certificate_pairs']}, "
@@ -1763,6 +1998,7 @@ def renew(dry_run=False):
     validate_local_environment()
     token, machine_id = read_active_identity()
     bindings = discover_bindings()
+    validate_reload_capacity(bindings)
     push_inventory(bindings, token, machine_id)
     changed = 0
     errors = []
@@ -1775,7 +2011,7 @@ def renew(dry_run=False):
             if not present:
                 log(
                     f"Group {group_id(group)} has no assigned certificate for "
-                    f"{', '.join(domains)}; keeping current files"
+                    f"{format_domains(domains)}; keeping current files"
                 )
                 continue
             identities = {desired_identity(value) for value in present}
@@ -1806,7 +2042,7 @@ def renew(dry_run=False):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="CertM API v2 nginx agent")
+    parser = argparse.ArgumentParser(description="CertM API v2 Linux web-server agent")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_FILE))
     subcommands = parser.add_subparsers(dest="command", required=True)
     preflight_parser = subcommands.add_parser("preflight")

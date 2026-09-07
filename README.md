@@ -2,12 +2,25 @@
 
 Public pull-based deployment agents for CertM.
 
-Current release candidate implementations:
+CertM has two agent implementations:
 
 - `linux/` — unified API v2 agent for nginx and Apache on Ubuntu, Debian,
-  RHEL, AlmaLinux, and Rocky Linux.
-- `rhel-nginx/` — compatibility wrapper for existing RC7 source checkouts.
+  RHEL, AlmaLinux, and Rocky Linux;
 - `windows/` — native API v2 agent for Windows Server + IIS.
+
+The other top-level directories are repository support files, not additional
+agents:
+
+| Path | Purpose | Installed on managed servers |
+|---|---|---:|
+| `tests/` | Automated Linux safety tests and Windows contract validation | No |
+| `.github/workflows/` | Runs the test suite on Linux and Windows | No |
+| `rhel-nginx/` | Deprecated compatibility wrapper for existing RC7 upgrade commands | Wrapper only |
+
+Do not use `rhel-nginx/` for new installations. It remains temporarily so an
+older checkout that still runs `rhel-nginx/install.sh` can migrate safely to the
+unified Linux installer. It can be removed after all RC7 checkouts use
+`linux/install.sh` directly.
 
 This repository intentionally contains no enrollment keys, client tokens, private keys, production configuration, or CertM server-side source.
 

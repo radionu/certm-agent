@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.12'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.13'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -66,10 +66,16 @@ Assert-True ($installer -match 'Copy-Item[^\r\n]+\$sourceUninstaller') `
     'The installer must retain the uninstaller with the installed agent.'
 Assert-True ($installer -match 'Copy-Item[^\r\n]+\$sourceUpdater') `
     'The installer must retain the software updater.'
-Assert-True ($installer -match "updateTaskName\s*=\s*'CertM Agent Update'") `
-    'The installer must register a separate software-update task.'
-Assert-True ($installer -match '/SC MINUTE /MO 15') `
-    'The software-update task must poll CertM every 15 minutes.'
+Assert-True ($installer -notmatch '/SC MINUTE /MO 15') `
+    'The installer must not register a separate 15-minute update task.'
+Assert-True ($installer -match '\$legacyUpdateTaskName[\s\S]+Unregister-ScheduledTask') `
+    'The installer must retire the legacy software-update task.'
+Assert-True ($agent -match '\[switch\]\$SkipUpdateCheck') `
+    'The IIS agent must support a non-recursive combined run.'
+Assert-True ($agent -match 'CertM\.Update\.ps1[\s\S]+certificate work will continue') `
+    'The IIS task must check updates first without blocking certificate work.'
+Assert-True ($updater -match 'Remove-LegacyUpdateTask') `
+    'The managed updater must retire the legacy 15-minute task after RC13 installs.'
 Assert-True ($updater -match '\[Threading\.Mutex\]::new\(\$true, ''Global\\CertM-IIS-Agent''') `
     'The updater and certificate agent must share the same mutex.'
 Assert-True ($updater -match 'VerifyData\(\$bytes, ''SHA256''') `

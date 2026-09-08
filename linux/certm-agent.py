@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.9"
+AGENT_VERSION = "1.0.0-rc.10"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -2065,11 +2065,12 @@ def renew(dry_run=False):
             errors.append(str(exc))
             log(f"ERROR {exc}", logging.ERROR)
 
-    try:
-        post_bindings = discover_bindings() if changed else bindings
-        push_inventory(post_bindings, token, machine_id)
-    except Exception as exc:
-        warn(f"Post-renew inventory failed: {exc}")
+    if changed:
+        try:
+            post_bindings = discover_bindings()
+            push_inventory(post_bindings, token, machine_id)
+        except Exception as exc:
+            warn(f"Post-renew inventory failed: {exc}")
     if errors:
         raise RuntimeError("; ".join(errors))
     log(f"Renew completed successfully; changed_groups={changed}; dry_run={dry_run}")

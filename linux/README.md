@@ -1,4 +1,4 @@
-# CertM Linux Agent 1.0.0-rc.9
+# CertM Linux Agent 1.0.0-rc.10
 
 One pull-based API v2 agent and installer for:
 
@@ -70,6 +70,11 @@ a compatibility wrapper around the unified installer.
 
 `discover` is optional and read-only. `preflight`, `inventory`, and `renew` always
 perform discovery themselves.
+
+A renewal submits one inventory before evaluating desired certificates. It
+submits a second, freshly discovered inventory only after a certificate or web
+server configuration was actually changed. No-change and dry-run renewals
+therefore create one inventory event.
 
 ```bash
 sudo /opt/certm-agent/certm-agent.py discover

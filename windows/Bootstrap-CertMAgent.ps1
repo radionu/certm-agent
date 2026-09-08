@@ -75,8 +75,15 @@ try {
     $installParameters = @{
         ApiBase = $ApiBase
         IntervalMinutes = $IntervalMinutes
-        RunOnce = $true
-        EnableTask = -not $Staged
+    }
+    if ($needsBootstrapCredential) {
+        $installParameters.RunOnce = $true
+    }
+    if ($Staged) {
+        $installParameters.EnableTask = $false
+    }
+    elseif ($needsBootstrapCredential) {
+        $installParameters.EnableTask = $true
     }
     if ($PSBoundParameters.ContainsKey('DisplayName')) {
         $installParameters.DisplayName = $DisplayName

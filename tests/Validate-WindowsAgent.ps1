@@ -54,10 +54,10 @@ Assert-True ($bootstrap -notmatch '\[string\]\$EnrollmentToken') `
     'The one-command bootstrap must not accept a plaintext enrollment token parameter.'
 Assert-True ($bootstrap -match '\[int\]\$IntervalMinutes\s*=\s*360') `
     'The one-command bootstrap must default to the production six-hour interval.'
-Assert-True ($bootstrap -match 'RunOnce\s*=\s*\$true') `
-    'The one-command bootstrap must perform initial enrollment immediately.'
-Assert-True ($bootstrap -match 'EnableTask\s*=\s*-not\s+\$Staged') `
-    'The one-command bootstrap must enable automation unless staged mode is requested.'
+Assert-True ($bootstrap -match 'if \(\$needsBootstrapCredential\)[\s\S]+RunOnce\s*=\s*\$true') `
+    'The one-command bootstrap must perform initial enrollment only for a new installation.'
+Assert-True ($bootstrap -match 'elseif \(\$needsBootstrapCredential\)[\s\S]+EnableTask\s*=\s*\$true') `
+    'The one-command bootstrap must enable certificate automation for a new non-staged installation.'
 Assert-True ($bootstrap -match "PSBoundParameters\.ContainsKey\('DisplayName'\)") `
     'The one-command bootstrap must preserve an existing display name unless explicitly changed.'
 Assert-True ($bootstrap -match 'ZeroFreeBSTR') `
@@ -112,6 +112,8 @@ Assert-True ($installer -match 'schtasks\.exe /Change /TN \$taskName /DISABLE') 
     'The IIS installer must disable the scheduled task during staged installation.'
 Assert-True ($installer -match 'if \(\$RunOnce\)') `
     'The IIS installer must guard the initial agent execution with RunOnce.'
+Assert-True ($installer -match 'existingTaskWasEnabled') `
+    'The IIS upgrade path must preserve the existing certificate-task state.'
 $assemblyLoad = $installer.IndexOf('Add-Type -AssemblyName System.Security')
 $dpapiUse = $installer.IndexOf('[Security.Cryptography.ProtectedData]::Protect')
 Assert-True ($assemblyLoad -ge 0 -and $dpapiUse -gt $assemblyLoad) `

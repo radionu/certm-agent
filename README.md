@@ -170,6 +170,11 @@ To upgrade an existing installation while preserving its DPAPI-protected client 
 .\Install-CertMAgent.ps1 -DisplayName 'IIS Download Server'
 ```
 
+An existing installation also preserves whether `CertM IIS Agent` was enabled
+or disabled. The separate `CertM Agent Update` task is enabled so CertM can
+manage later software releases; the installer does not run a certificate cycle
+unless `-RunOnce` is supplied explicitly.
+
 Inspect current IIS bindings without contacting CertM or changing certificates:
 
 ```powershell

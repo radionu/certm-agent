@@ -30,6 +30,9 @@ if (-not (Test-Path -LiteralPath $sourceAgent)) { throw "Missing agent file: $so
 if (-not (Test-Path -LiteralPath $sourceUninstaller)) { throw "Missing uninstaller file: $sourceUninstaller" }
 if (-not (Test-Path -LiteralPath $sourceUpdater)) { throw "Missing updater file: $sourceUpdater" }
 $existingConfiguration = Test-Path -LiteralPath $configPath
+$taskName = 'CertM IIS Agent'
+$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+$existingTaskWasEnabled = $null -ne $existingTask -and $existingTask.State -ne 'Disabled'
 
 if (-not $existingConfiguration -or $Force) {
     if (-not $ApiBase.StartsWith('https://', [StringComparison]::OrdinalIgnoreCase)) {
@@ -102,13 +105,22 @@ else {
 }
 $config | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
 
-$taskName = 'CertM IIS Agent'
 $agentPath = Join-Path $bin 'CertM.Agent.ps1'
 $taskCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$agentPath`""
 & schtasks.exe /Create /TN $taskName /TR $taskCommand /SC MINUTE /MO $IntervalMinutes /RU SYSTEM /RL HIGHEST /F | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not register the CertM scheduled task.' }
 
-if (-not $EnableTask) {
+$shouldEnableTask = if ($PSBoundParameters.ContainsKey('EnableTask')) {
+    [bool]$EnableTask
+}
+elseif ($existingConfiguration -and $null -ne $existingTask) {
+    $existingTaskWasEnabled
+}
+else {
+    $false
+}
+
+if (-not $shouldEnableTask) {
     & schtasks.exe /Change /TN $taskName /DISABLE | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not disable the CertM scheduled task for staged validation.' }
 }
@@ -121,7 +133,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not register the CertM agent update task
 
 Write-Host "CertM IIS Agent 1.0.0-rc.11 installed."
 Write-Host "Configuration: $configPath"
-if ($EnableTask) {
+if ($shouldEnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"
 }
 else {
@@ -136,7 +148,7 @@ if ($RunOnce) {
     }
     else {
         if (-not $existingConfiguration -or $Force) {
-            if ($EnableTask) {
+            if ($shouldEnableTask) {
                 Write-Host 'Initial enrollment completed. Approve the new client in CertM; the enabled task will retry automatically.'
             }
             else {

@@ -1,5 +1,5 @@
 [Unit]
-Description=CertM agent software update check
+Description=Legacy CertM update-task migration trigger
 After=network-online.target
 Wants=network-online.target
 

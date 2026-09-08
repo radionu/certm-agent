@@ -18,7 +18,7 @@ jobs:
           python3 -m json.tool linux/agent.json.example >/dev/null
           python3 -m json.tool windows/config.example.json >/dev/null
           bash -n linux/install.sh
-          python3 scripts/build_release.py 1.0.0-rc.12 --output "$RUNNER_TEMP/releases"
+          python3 scripts/build_release.py 1.0.0-rc.13 --output "$RUNNER_TEMP/releases"
       - name: Run Linux discovery and safety tests
         run: python3 -m unittest discover -s tests -v
 

@@ -55,7 +55,9 @@ sudo ./install.sh --web-server apache --display-name 'Apache Production 01'
 Keep `/opt/certm-agent-src` as the source checkout; the installed runtime is
 separate in `/opt/certm-agent`.
 
-The first upgrade to 1.0.0-rc.11 must be installed from the public checkout:
+The first upgrade from an agent without the managed updater must be installed
+from the public checkout. Version 1.0.0-rc.11 introduced this one-time
+bootstrap requirement:
 
 ```bash
 sudo git -C /opt/certm-agent-src pull --ff-only origin main

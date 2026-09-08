@@ -131,7 +131,7 @@ $updateTaskCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy
 & schtasks.exe /Create /TN $updateTaskName /TR $updateTaskCommand /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not register the CertM agent update task.' }
 
-Write-Host "CertM IIS Agent 1.0.0-rc.11 installed."
+Write-Host "CertM IIS Agent 1.0.0-rc.12 installed."
 Write-Host "Configuration: $configPath"
 if ($shouldEnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"

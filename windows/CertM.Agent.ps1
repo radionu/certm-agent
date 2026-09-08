@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
     [string]$ConfigPath = 'C:\CertM\config.json',
-    [ValidateSet('Run', 'Discover', 'Inventory', 'DryRun')][string]$Mode = 'Run'
+    [ValidateSet('Run', 'Discover', 'Inventory', 'DryRun')][string]$Mode = 'Run',
+    [switch]$SkipUpdateCheck
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.12'
+$script:AgentVersion = '1.0.0-rc.13'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -403,6 +404,23 @@ function Install-DeploymentGroup {
     finally {
         if (Test-Path -LiteralPath $pfxPath) { Remove-Item -LiteralPath $pfxPath -Force }
     }
+}
+
+if ($Mode -eq 'Run' -and -not $SkipUpdateCheck) {
+    $updaterPath = Join-Path $script:CertMRoot 'bin\CertM.Update.ps1'
+    if (Test-Path -LiteralPath $updaterPath) {
+        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File $updaterPath -ConfigPath $ConfigPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-CertMLog (
+                "Agent update check failed with exit code $LASTEXITCODE; " +
+                'certificate work will continue.'
+            ) 'WARN'
+        }
+    }
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File $PSCommandPath -ConfigPath $ConfigPath -Mode Run -SkipUpdateCheck
+    exit $LASTEXITCODE
 }
 
 try {

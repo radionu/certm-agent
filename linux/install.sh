@@ -336,7 +336,7 @@ fi
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.9 installed. Running full preflight before enrollment."
+echo "CertM Agent 1.0.0-rc.10 installed. Running full preflight before enrollment."
 /opt/certm-agent/certm-agent.py preflight --enroll
 echo
 echo "Installation and preflight completed."

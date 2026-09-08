@@ -413,22 +413,39 @@ class NginxRenewPlanningTest(unittest.TestCase):
             "fingerprint_sha256": "a" * 64,
         }
 
-    def renew_with(self, desired_values, dry_run=False):
+    def renew_with(
+        self,
+        desired_values,
+        dry_run=False,
+        deploy_changed=False,
+        post_bindings=None,
+    ):
+        discovered = [self.bindings]
+        if post_bindings is not None:
+            discovered.append(post_bindings)
         with mock.patch.object(agent, "validate_local_environment"), \
                 mock.patch.object(agent, "read_active_identity", return_value=("token", "machine")), \
-                mock.patch.object(agent, "discover_bindings", return_value=self.bindings), \
+                mock.patch.object(agent, "discover_bindings", side_effect=discovered) as discover, \
                 mock.patch.object(agent, "validate_reload_capacity"), \
-                mock.patch.object(agent, "push_inventory"), \
+                mock.patch.object(agent, "push_inventory") as inventory, \
                 mock.patch.object(agent, "desired_for", side_effect=desired_values), \
-                mock.patch.object(agent, "deploy_group", return_value=False) as deploy, \
+                mock.patch.object(agent, "deploy_group", return_value=deploy_changed) as deploy, \
                 mock.patch.object(agent, "deploy_split_group", return_value=False) as split:
             agent.renew(dry_run=dry_run)
+            self.discover = discover
+            self.inventory = inventory
             return deploy, split
 
     def test_no_assignment_never_deploys(self):
         deploy, split = self.renew_with([None, None])
         deploy.assert_not_called()
         split.assert_not_called()
+
+    def test_no_change_submits_inventory_once(self):
+        self.renew_with([None, None])
+
+        self.discover.assert_called_once_with()
+        self.inventory.assert_called_once_with(self.bindings, "token", "machine")
 
     def test_shared_paths_with_partial_assignment_are_split(self):
         deploy, split = self.renew_with([self.desired, None], dry_run=True)
@@ -448,6 +465,30 @@ class NginxRenewPlanningTest(unittest.TestCase):
         deploy.assert_called_once()
         self.assertTrue(deploy.call_args.args[-1])
         split.assert_not_called()
+        self.discover.assert_called_once_with()
+        self.inventory.assert_called_once_with(self.bindings, "token", "machine")
+
+    def test_successful_change_submits_refreshed_inventory(self):
+        refreshed = [dict(binding) for binding in self.bindings]
+        for binding in refreshed:
+            binding["fingerprint_sha256"] = self.desired["fingerprint_sha256"]
+
+        deploy, split = self.renew_with(
+            [self.desired, self.desired],
+            deploy_changed=True,
+            post_bindings=refreshed,
+        )
+
+        deploy.assert_called_once()
+        split.assert_not_called()
+        self.assertEqual(self.discover.call_count, 2)
+        self.assertEqual(
+            self.inventory.call_args_list,
+            [
+                mock.call(self.bindings, "token", "machine"),
+                mock.call(refreshed, "token", "machine"),
+            ],
+        )
 
     def test_current_certificate_dry_run_does_not_write_binding_state(self):
         with mock.patch.object(

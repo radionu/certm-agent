@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 
 
-UPDATER_VERSION = "1.0.0-rc.11"
+UPDATER_VERSION = "1.0.0-rc.12"
 CONFIG_PATH = Path("/etc/certm/agent.json")
 PUBLIC_KEY_PATH = Path("/etc/certm/update-public.pem")
 LOCK_PATH = Path("/run/certm-agent.lock")

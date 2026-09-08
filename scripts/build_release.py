@@ -18,6 +18,9 @@ PLATFORM_FILES = {
         "linux/certm_agent/apache.py",
         "linux/systemd/certm-agent.service",
         "linux/systemd/certm-agent.timer",
+        # RC12's updater requires these paths while installing transitional
+        # RC13. RC13 removes the units locally and accepts their omission in
+        # subsequent package manifests.
         "linux/systemd/certm-agent-update.service",
         "linux/systemd/certm-agent-update.timer",
     ],

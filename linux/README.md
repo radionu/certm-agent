@@ -1,4 +1,4 @@
-# CertM Linux Agent 1.0.0-rc.12
+# CertM Linux Agent 1.0.0-rc.13
 
 One pull-based API v2 agent and installer for:
 
@@ -66,12 +66,14 @@ sudo ./install.sh
 RHEL/nginx installations now use this unified installer directly. The obsolete
 `rhel-nginx/` compatibility wrapper is no longer part of the repository.
 
-The installer also enables `certm-agent-update.timer`. It checks CertM every 15
-minutes, but installs only a version allowed by the server's AUTO/MANUAL policy.
-The separate update service shares `/run/certm-agent.lock` with certificate work,
-verifies SHA-256, RSA signature, and every manifest file, and rolls back the
-runtime when its self-test fails. Configuration, client identity, certificate
-state, backups, and logs are not part of the replaced runtime set.
+`certm-agent.timer` runs one six-hour cycle. Its service first checks CertM for
+a version allowed by the server's AUTO/MANUAL policy, then runs certificate
+inventory and renewal with the newly installed agent. Update failure is isolated
+and does not block certificate work. The updater verifies SHA-256, RSA signature,
+and every manifest file, and rolls back the runtime when its self-test fails.
+Configuration, client identity, certificate state, backups, and logs are not
+part of the replaced runtime set. RC13 retires the legacy 15-minute update timer
+automatically after upgrading from RC12.
 
 ## Command flow
 

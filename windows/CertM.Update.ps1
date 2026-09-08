@@ -3,7 +3,7 @@ param([string]$ConfigPath = 'C:\CertM\config.json')
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:UpdaterVersion = '1.0.0-rc.12'
+$script:UpdaterVersion = '1.0.0-rc.13'
 $script:Root = 'C:\CertM'
 $script:Mutex = $null
 $script:Config = $null
@@ -242,6 +242,20 @@ function Test-InstalledScripts {
     [void](Get-Website)
 }
 
+function Remove-LegacyUpdateTask {
+    $legacyTaskName = 'CertM Agent Update'
+    if ($null -eq (Get-ScheduledTask -TaskName $legacyTaskName -ErrorAction SilentlyContinue)) {
+        return
+    }
+    try {
+        Unregister-ScheduledTask -TaskName $legacyTaskName -Confirm:$false -ErrorAction Stop
+        Write-UpdateLog 'Removed legacy 15-minute update task; updates now run with the six-hour certificate task.'
+    }
+    catch {
+        Write-UpdateLog "Unable to remove legacy update task: $($_.Exception.Message)"
+    }
+}
+
 function Invoke-AgentUpdate {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { return }
     $script:Config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -318,6 +332,7 @@ try {
         Write-UpdateLog 'Another CertM agent process is running; update check skipped.'
         exit 0
     }
+    Remove-LegacyUpdateTask
     Invoke-AgentUpdate
 }
 catch {

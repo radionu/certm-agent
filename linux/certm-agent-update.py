@@ -16,23 +16,26 @@ import urllib.request
 from pathlib import Path
 
 
-UPDATER_VERSION = "1.0.0-rc.12"
+UPDATER_VERSION = "1.0.0-rc.13"
 CONFIG_PATH = Path("/etc/certm/agent.json")
 PUBLIC_KEY_PATH = Path("/etc/certm/update-public.pem")
 LOCK_PATH = Path("/run/certm-agent.lock")
 STATE_ROOT = Path("/var/lib/certm/agent-updates")
 LOG_PATH = Path("/var/log/certm/certm-agent-update.log")
 
-TARGETS = {
+CORE_TARGETS = {
     "linux/certm-agent.py": Path("/opt/certm-agent/certm-agent.py"),
     "linux/certm-agent-update.py": Path("/opt/certm-agent/certm-agent-update.py"),
     "linux/certm_agent/__init__.py": Path("/opt/certm-agent/certm_agent/__init__.py"),
     "linux/certm_agent/apache.py": Path("/opt/certm-agent/certm_agent/apache.py"),
     "linux/systemd/certm-agent.service": Path("/etc/systemd/system/certm-agent.service"),
     "linux/systemd/certm-agent.timer": Path("/etc/systemd/system/certm-agent.timer"),
+}
+LEGACY_TARGETS = {
     "linux/systemd/certm-agent-update.service": Path("/etc/systemd/system/certm-agent-update.service"),
     "linux/systemd/certm-agent-update.timer": Path("/etc/systemd/system/certm-agent-update.timer"),
 }
+TARGETS = {**CORE_TARGETS, **LEGACY_TARGETS}
 
 
 def log(message):
@@ -158,7 +161,7 @@ def verify_manifest(root, expected_version):
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != item.get("sha256"):
             raise RuntimeError(f"Manifest hash mismatch: {relative}")
         declared.add(relative)
-    if declared != set(TARGETS):
+    if declared not in (set(CORE_TARGETS), set(TARGETS)):
         raise RuntimeError("Manifest does not contain the complete Linux runtime")
     actual = {
         str(path.relative_to(root))
@@ -184,10 +187,11 @@ def copy_atomic(source, target):
         temporary.unlink(missing_ok=True)
 
 
-def install(root, backup):
+def install(root, backup, declared):
     backup.mkdir(parents=True, exist_ok=False)
     existing = {}
-    for relative, target in TARGETS.items():
+    for relative in declared:
+        target = TARGETS[relative]
         if target.exists():
             saved = backup / relative
             saved.parent.mkdir(parents=True, exist_ok=True)
@@ -202,7 +206,8 @@ def install(root, backup):
 
 def rollback(backup):
     existing = json.loads((backup / "existing.json").read_text())
-    for relative, target in TARGETS.items():
+    for relative in existing:
+        target = TARGETS[relative]
         if existing.get(relative):
             copy_atomic(backup / relative, target)
         else:
@@ -220,6 +225,28 @@ def self_test(version):
     )
     if result.returncode != 0 or installed_version() != version:
         raise RuntimeError("Updated Linux agent failed its executable/version self-test")
+
+
+def retire_legacy_schedule():
+    legacy_paths = tuple(LEGACY_TARGETS.values())
+    if not any(path.exists() for path in legacy_paths):
+        return
+    subprocess.run(
+        ["systemctl", "disable", "--now", "certm-agent-update.timer"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    for path in legacy_paths:
+        path.unlink(missing_ok=True)
+    subprocess.run(
+        ["systemctl", "daemon-reload"],
+        check=False,
+        timeout=30,
+    )
+    log("Retired legacy 15-minute agent-update timer; updates now run with the six-hour certificate cycle")
 
 
 def run_update():
@@ -264,9 +291,13 @@ def run_update():
                 timeout=60,
             )
             safe_extract(archive, extracted)
-            verify_manifest(extracted, version)
+            manifest = verify_manifest(extracted, version)
             modified = True
-            install(extracted, backup)
+            install(
+                extracted,
+                backup,
+                [str(item["path"]) for item in manifest["files"]],
+            )
             self_test(version)
             report(config, token, machine_id, release_id, "SUCCESS", f"Linux agent {version} installed", version)
             log(f"CertM Linux agent updated successfully to {version}")
@@ -291,6 +322,7 @@ def main():
         except BlockingIOError:
             log("Another CertM agent process is running; update check skipped")
             return
+        retire_legacy_schedule()
         run_update()
 
 

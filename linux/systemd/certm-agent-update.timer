@@ -1,5 +1,5 @@
 [Unit]
-Description=Check CertM for approved agent software updates
+Description=Retire legacy CertM update schedule after the RC13 transition
 
 [Timer]
 OnBootSec=10min

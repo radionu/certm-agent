@@ -1092,6 +1092,24 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
         self.assertIn("systemd/nofile.conf", installer)
         self.assertIn("NOFILE_FLOOR=4096", installer)
         self.assertIn("previous_service_type", installer)
+        self.assertNotIn(
+            'install -m 0644 "${BASE_DIR}/systemd/certm-agent-update.timer"',
+            installer,
+        )
+        self.assertNotIn(
+            "systemctl enable --now certm-agent-update.timer",
+            installer,
+        )
+        service = (
+            REPOSITORY_ROOT / "linux" / "systemd" / "certm-agent.service"
+        ).read_text()
+        update = service.index(
+            "ExecStart=-/opt/certm-agent/certm-agent-update.py"
+        )
+        certificate = service.index(
+            "ExecStart=/opt/certm-agent/certm-agent.py renew"
+        )
+        self.assertLess(update, certificate)
 
     def test_agent_rejects_python_older_than_38(self):
         with mock.patch.object(agent.os, "geteuid", return_value=0), \

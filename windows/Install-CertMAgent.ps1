@@ -125,13 +125,12 @@ if (-not $shouldEnableTask) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not disable the CertM scheduled task for staged validation.' }
 }
 
-$updateTaskName = 'CertM Agent Update'
-$updaterPath = Join-Path $bin 'CertM.Update.ps1'
-$updateTaskCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$updaterPath`""
-& schtasks.exe /Create /TN $updateTaskName /TR $updateTaskCommand /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not register the CertM agent update task.' }
+$legacyUpdateTaskName = 'CertM Agent Update'
+if ($null -ne (Get-ScheduledTask -TaskName $legacyUpdateTaskName -ErrorAction SilentlyContinue)) {
+    Unregister-ScheduledTask -TaskName $legacyUpdateTaskName -Confirm:$false -ErrorAction Stop
+}
 
-Write-Host "CertM IIS Agent 1.0.0-rc.12 installed."
+Write-Host "CertM IIS Agent 1.0.0-rc.13 installed."
 Write-Host "Configuration: $configPath"
 if ($shouldEnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"
@@ -139,7 +138,7 @@ if ($shouldEnableTask) {
 else {
     Write-Host "Task: $taskName (disabled for staged validation)"
 }
-Write-Host "Update task: $updateTaskName (enabled; every 15 minutes; server policy controls installation)"
+Write-Host 'Agent update checks run inside the six-hour certificate task.'
 
 if ($RunOnce) {
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $agentPath

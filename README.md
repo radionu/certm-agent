@@ -65,17 +65,16 @@ cd /opt/certm-agent-src/linux
 sudo ./install.sh
 ```
 
-That one-time bootstrap installs `certm-agent-update.timer`. Afterwards each
-client checks CertM every 15 minutes. CertM decides whether a client uses AUTO
-or MANUAL updates; clients still use outbound HTTPS only. The updater verifies
-the package SHA-256, RSA signature, and manifest, performs a self-test, and
-restores the previous runtime if installation fails.
+Version 1.0.0-rc.13 consolidates software updates and certificate work into one
+six-hour cycle. `certm-agent.timer` activates `certm-agent.service`; the oneshot
+service first checks and installs an approved agent release, then starts the
+newly installed agent for certificate inventory and renewal. An update failure
+is logged but does not block certificate work. The updater verifies the package
+SHA-256, RSA signature, and manifest, performs a self-test, and restores the
+previous runtime if installation fails.
 
-`certm-agent.timer` is only the six-hour schedule. It activates
-`certm-agent.service`, whose oneshot process performs certificate inventory and
-renewal, then becomes inactive. Likewise, `certm-agent-update.timer` is the
-15-minute schedule and `certm-agent-update.service` performs the update check.
-Only timers should be enabled; the service units are invoked by their timers.
+Only `certm-agent.timer` is enabled. The legacy `certm-agent-update.timer` and
+service are retired automatically after an RC12 client installs RC13.
 
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key
@@ -173,9 +172,9 @@ To upgrade an existing installation while preserving its DPAPI-protected client 
 ```
 
 An existing installation also preserves whether `CertM IIS Agent` was enabled
-or disabled. The separate `CertM Agent Update` task is enabled so CertM can
-manage later software releases; the installer does not run a certificate cycle
-unless `-RunOnce` is supplied explicitly.
+or disabled. That single six-hour task checks for approved agent updates before
+running certificate work. The installer does not run a certificate cycle unless
+`-RunOnce` is supplied explicitly.
 
 Inspect current IIS bindings without contacting CertM or changing certificates:
 
@@ -205,7 +204,7 @@ Enable-ScheduledTask -TaskName 'CertM IIS Agent'
 The installer creates:
 
 - task `CertM IIS Agent`, running as `SYSTEM` at the configured interval and disabled by default;
-- task `CertM Agent Update`, running as `SYSTEM` every 15 minutes;
+- no separate update task; the same task checks software updates first;
 - program directory `C:\CertM\bin`;
 - protected configuration `C:\CertM\config.json`;
 - state file `C:\CertM\state.json` after the first deployment;

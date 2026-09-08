@@ -66,7 +66,7 @@ try {
     }
 
     $installerDirectory = $installer[0].Directory.FullName
-    foreach ($requiredFile in @('CertM.Agent.ps1', 'Uninstall-CertMAgent.ps1')) {
+    foreach ($requiredFile in @('CertM.Agent.ps1', 'CertM.Update.ps1', 'Uninstall-CertMAgent.ps1')) {
         if (-not (Test-Path -LiteralPath (Join-Path $installerDirectory $requiredFile))) {
             throw "Release is missing windows/$requiredFile"
         }

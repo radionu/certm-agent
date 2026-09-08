@@ -8,19 +8,17 @@ CertM has two agent implementations:
   RHEL, AlmaLinux, and Rocky Linux;
 - `windows/` — native API v2 agent for Windows Server + IIS.
 
-The other top-level directories are repository support files, not additional
-agents:
+The other top-level directories are repository support files, not additional agents:
 
 | Path | Purpose | Installed on managed servers |
 |---|---|---:|
 | `tests/` | Automated Linux safety tests and Windows contract validation | No |
 | `.github/workflows/` | Runs the test suite on Linux and Windows | No |
-| `rhel-nginx/` | Deprecated compatibility wrapper for existing RC7 upgrade commands | Wrapper only |
 
-Do not use `rhel-nginx/` for new installations. It remains temporarily so an
-older checkout that still runs `rhel-nginx/install.sh` can migrate safely to the
-unified Linux installer. It can be removed after all RC7 checkouts use
-`linux/install.sh` directly.
+The obsolete `rhel-nginx/` compatibility wrapper has been removed. RHEL,
+AlmaLinux, Rocky Linux, Ubuntu, and Debian all use the unified `linux/` agent.
+The `tests/` directory remains because it prevents unsafe agent releases; it is
+never copied to managed servers.
 
 This repository intentionally contains no enrollment keys, client tokens, private keys, production configuration, or CertM server-side source.
 
@@ -57,13 +55,25 @@ sudo ./install.sh --web-server apache --display-name 'Apache Production 01'
 Keep `/opt/certm-agent-src` as the source checkout; the installed runtime is
 separate in `/opt/certm-agent`.
 
-To upgrade an installed agent from the same public checkout:
+The first upgrade to 1.0.0-rc.11 must be installed from the public checkout:
 
 ```bash
 sudo git -C /opt/certm-agent-src pull --ff-only origin main
 cd /opt/certm-agent-src/linux
 sudo ./install.sh
 ```
+
+That one-time bootstrap installs `certm-agent-update.timer`. Afterwards each
+client checks CertM every 15 minutes. CertM decides whether a client uses AUTO
+or MANUAL updates; clients still use outbound HTTPS only. The updater verifies
+the package SHA-256, RSA signature, and manifest, performs a self-test, and
+restores the previous runtime if installation fails.
+
+`certm-agent.timer` is only the six-hour schedule. It activates
+`certm-agent.service`, whose oneshot process performs certificate inventory and
+renewal, then becomes inactive. Likewise, `certm-agent-update.timer` is the
+15-minute schedule and `certm-agent-update.service` performs the update check.
+Only timers should be enabled; the service units are invoked by their timers.
 
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key
@@ -137,7 +147,7 @@ $p="$env:TEMP\Install-CertM.ps1"; Invoke-WebRequest -UseBasicParsing 'https://ra
 Use `-Staged` when the machine requires the supervised discovery/dry-run workflow. The
 bootstrap then enrolls once but leaves the task disabled.
 
-For a manual or offline installation, download the three PowerShell files in `windows/`
+For a manual or offline installation, download the four PowerShell files in `windows/`
 to one directory, then run:
 
 ```powershell
@@ -188,6 +198,7 @@ Enable-ScheduledTask -TaskName 'CertM IIS Agent'
 The installer creates:
 
 - task `CertM IIS Agent`, running as `SYSTEM` at the configured interval and disabled by default;
+- task `CertM Agent Update`, running as `SYSTEM` every 15 minutes;
 - program directory `C:\CertM\bin`;
 - protected configuration `C:\CertM\config.json`;
 - state file `C:\CertM\state.json` after the first deployment;
@@ -226,5 +237,7 @@ Remove all CertM agent data as well:
 | Desired package | `GET /api/v2/cert/desired?domain=...` |
 | PFX download | `GET /api/v2/cert/download?domain=...&service=iis&port=...&format=pfx` |
 | Verified report | `POST /api/v2/deployment/report` |
+| Agent update check | `GET /api/v2/client/agent-update` |
+| Agent update report | `POST /api/v2/client/agent-update/report` |
 
 All authenticated calls send both the bearer token and `X-CertM-Machine-ID`.

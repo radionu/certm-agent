@@ -299,13 +299,17 @@ path.chmod(0o600)
 PY
 
 install -m 0750 "${BASE_DIR}/certm-agent.py" /opt/certm-agent/certm-agent.py
+install -m 0750 "${BASE_DIR}/certm-agent-update.py" /opt/certm-agent/certm-agent-update.py
 sed -i "1s|^#!.*$|#!${PYTHON_BIN}|" /opt/certm-agent/certm-agent.py
+sed -i "1s|^#!.*$|#!${PYTHON_BIN}|" /opt/certm-agent/certm-agent-update.py
 install -m 0644 "${BASE_DIR}/certm_agent/__init__.py" /opt/certm-agent/certm_agent/__init__.py
 install -m 0644 "${BASE_DIR}/certm_agent/apache.py" /opt/certm-agent/certm_agent/apache.py
 rm -f /opt/certm-agent/certm-agent-core.py
 
 install -m 0644 "${BASE_DIR}/systemd/certm-agent.service" /etc/systemd/system/certm-agent.service
 install -m 0644 "${BASE_DIR}/systemd/certm-agent.timer" /etc/systemd/system/certm-agent.timer
+install -m 0644 "${BASE_DIR}/systemd/certm-agent-update.service" /etc/systemd/system/certm-agent-update.service
+install -m 0644 "${BASE_DIR}/systemd/certm-agent-update.timer" /etc/systemd/system/certm-agent-update.timer
 install -d -m 0755 /etc/systemd/system/certm-agent.service.d
 sed "s|@WEB_SERVER_UNIT@|${SYSTEMD_UNIT}|g" \
   "${BASE_DIR}/systemd/web-server.conf" \
@@ -336,8 +340,9 @@ fi
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.10 installed. Running full preflight before enrollment."
+echo "CertM Agent 1.0.0-rc.11 installed. Running full preflight before enrollment."
 /opt/certm-agent/certm-agent.py preflight --enroll
+systemctl enable --now certm-agent-update.timer
 echo
 echo "Installation and preflight completed."
 echo "For a new install, run a dry-run and one supervised renewal before enabling the timer."

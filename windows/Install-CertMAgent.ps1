@@ -3,7 +3,7 @@ param(
     [string]$EnrollmentToken = '',
     [string]$ApiBase = 'https://certm.pmr.vn/api/v2',
     [ValidateLength(0, 100)][string]$DisplayName = '',
-    [ValidateRange(5, 1440)][int]$IntervalMinutes = 30,
+    [ValidateRange(5, 1440)][int]$IntervalMinutes = 360,
     [string]$VerifyConnectHost = '',
     [switch]$Force,
     [switch]$EnableTask,
@@ -25,8 +25,10 @@ $bin = Join-Path $root 'bin'
 $configPath = Join-Path $root 'config.json'
 $sourceAgent = Join-Path $PSScriptRoot 'CertM.Agent.ps1'
 $sourceUninstaller = Join-Path $PSScriptRoot 'Uninstall-CertMAgent.ps1'
+$sourceUpdater = Join-Path $PSScriptRoot 'CertM.Update.ps1'
 if (-not (Test-Path -LiteralPath $sourceAgent)) { throw "Missing agent file: $sourceAgent" }
 if (-not (Test-Path -LiteralPath $sourceUninstaller)) { throw "Missing uninstaller file: $sourceUninstaller" }
+if (-not (Test-Path -LiteralPath $sourceUpdater)) { throw "Missing updater file: $sourceUpdater" }
 $existingConfiguration = Test-Path -LiteralPath $configPath
 
 if (-not $existingConfiguration -or $Force) {
@@ -46,6 +48,7 @@ New-Item -ItemType Directory -Path (Join-Path $root 'logs') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $root 'staging') -Force | Out-Null
 Copy-Item -LiteralPath $sourceAgent -Destination (Join-Path $bin 'CertM.Agent.ps1') -Force
 Copy-Item -LiteralPath $sourceUninstaller -Destination (Join-Path $bin 'Uninstall-CertMAgent.ps1') -Force
+Copy-Item -LiteralPath $sourceUpdater -Destination (Join-Path $bin 'CertM.Update.ps1') -Force
 
 & icacls.exe $root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not secure the CertM data directory ACL.' }
@@ -110,7 +113,13 @@ if (-not $EnableTask) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not disable the CertM scheduled task for staged validation.' }
 }
 
-Write-Host "CertM IIS Agent 1.0.0-rc.10 installed."
+$updateTaskName = 'CertM Agent Update'
+$updaterPath = Join-Path $bin 'CertM.Update.ps1'
+$updateTaskCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$updaterPath`""
+& schtasks.exe /Create /TN $updateTaskName /TR $updateTaskCommand /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /F | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Could not register the CertM agent update task.' }
+
+Write-Host "CertM IIS Agent 1.0.0-rc.11 installed."
 Write-Host "Configuration: $configPath"
 if ($EnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"
@@ -118,6 +127,7 @@ if ($EnableTask) {
 else {
     Write-Host "Task: $taskName (disabled for staged validation)"
 }
+Write-Host "Update task: $updateTaskName (enabled; every 15 minutes; server policy controls installation)"
 
 if ($RunOnce) {
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $agentPath

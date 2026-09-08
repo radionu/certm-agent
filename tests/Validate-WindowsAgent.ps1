@@ -9,11 +9,13 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $agentPath = Join-Path $repositoryRoot 'windows\CertM.Agent.ps1'
 $installerPath = Join-Path $repositoryRoot 'windows\Install-CertMAgent.ps1'
 $bootstrapPath = Join-Path $repositoryRoot 'windows\Bootstrap-CertMAgent.ps1'
+$updaterPath = Join-Path $repositoryRoot 'windows\CertM.Update.ps1'
 $configPath = Join-Path $repositoryRoot 'windows\config.example.json'
 
 $agent = Get-Content -LiteralPath $agentPath -Raw -Encoding UTF8
 $installer = Get-Content -LiteralPath $installerPath -Raw -Encoding UTF8
 $bootstrap = Get-Content -LiteralPath $bootstrapPath -Raw -Encoding UTF8
+$updater = Get-Content -LiteralPath $updaterPath -Raw -Encoding UTF8
 $uninstaller = Get-Content -LiteralPath (Join-Path $repositoryRoot 'windows\Uninstall-CertMAgent.ps1') -Raw -Encoding UTF8
 $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
@@ -36,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.10'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.11'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -62,6 +64,20 @@ Assert-True ($bootstrap -match 'ZeroFreeBSTR') `
     'The one-command bootstrap must clear the plaintext credential buffer.'
 Assert-True ($installer -match 'Copy-Item[^\r\n]+\$sourceUninstaller') `
     'The installer must retain the uninstaller with the installed agent.'
+Assert-True ($installer -match 'Copy-Item[^\r\n]+\$sourceUpdater') `
+    'The installer must retain the software updater.'
+Assert-True ($installer -match "updateTaskName\s*=\s*'CertM Agent Update'") `
+    'The installer must register a separate software-update task.'
+Assert-True ($installer -match '/SC MINUTE /MO 15') `
+    'The software-update task must poll CertM every 15 minutes.'
+Assert-True ($updater -match '\[Threading\.Mutex\]::new\(\$true, ''Global\\CertM-IIS-Agent''') `
+    'The updater and certificate agent must share the same mutex.'
+Assert-True ($updater -match 'VerifyData\(\$bytes, ''SHA256''') `
+    'The updater must verify the package RSA-SHA256 signature.'
+Assert-True ($updater -match "'ROLLBACK'") `
+    'The updater must report rollback after a failed installation.'
+Assert-True ($bootstrap -match "'CertM.Update.ps1'") `
+    'The bootstrap must require the updater in every release.'
 Assert-True ($installer -match '\[string\]\$DisplayName') `
     'The IIS installer must accept a friendly display name.'
 Assert-True ($agent -match 'hostname\s*=\s*\$env:COMPUTERNAME') `
@@ -108,7 +124,7 @@ Assert-True ($installer -match '\$root\s*=\s*''C:\\CertM''') `
     'The IIS installer root must be C:\CertM.'
 Assert-True ($uninstaller -match '\$root\s*=\s*''C:\\CertM''') `
     'The IIS uninstaller root must be C:\CertM.'
-Assert-True (($agent + $installer + $bootstrap + $uninstaller) -notmatch 'ProgramData') `
+Assert-True (($agent + $installer + $bootstrap + $updater + $uninstaller) -notmatch 'ProgramData') `
     'Windows agent scripts must not use the obsolete ProgramData installation root.'
 
 Write-Host 'Windows agent contract validation passed.'

@@ -1,0 +1,11 @@
+[Unit]
+Description=CertM agent software update check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/certm-agent/certm-agent-update.py
+User=root
+Group=root
+Nice=10

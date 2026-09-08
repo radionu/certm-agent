@@ -1,0 +1,12 @@
+[Unit]
+Description=Check CertM for approved agent software updates
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+RandomizedDelaySec=5min
+Persistent=true
+Unit=certm-agent-update.service
+
+[Install]
+WantedBy=timers.target

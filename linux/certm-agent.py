@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.12"
+AGENT_VERSION = "1.0.0-rc.13"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")

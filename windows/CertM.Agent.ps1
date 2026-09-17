@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.14'
+$script:AgentVersion = '1.0.0-rc.15'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -619,6 +619,20 @@ try {
         }
         Install-DeploymentGroup @($group.Group) $clientToken $machineId $state
         Write-JsonFileAtomic $statePath $state
+    }
+
+    if ($plans.Count -gt 0 -and $Mode -ne 'DryRun') {
+        try {
+            $postDeploymentBindings = @(Get-IisHttpsBindings)
+            Send-Inventory $postDeploymentBindings $clientToken $machineId
+            Write-CertMLog (
+                "Post-deployment inventory sent; " +
+                "$($postDeploymentBindings.Count) IIS HTTPS binding(s) refreshed."
+            )
+        }
+        catch {
+            Write-CertMLog "Post-deployment inventory failed: $($_.Exception.Message)" 'WARN'
+        }
     }
 
     if ($plans.Count -eq 0) {

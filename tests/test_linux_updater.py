@@ -18,6 +18,16 @@ SPEC.loader.exec_module(UPDATER)
 
 
 class LinuxUpdaterSafetyTest(unittest.TestCase):
+    def test_ip_approval_error_is_operator_friendly(self):
+        error = UPDATER.ApiError(403, {
+            "status": "ip_pending_approval",
+            "source_ip": "198.51.100.20",
+            "message": "This source IP is waiting for administrator approval.",
+        })
+
+        self.assertIn("198.51.100.20", str(error))
+        self.assertIn("administrator approval", str(error))
+
     def test_safe_extract_rejects_parent_traversal(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

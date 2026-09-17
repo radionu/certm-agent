@@ -27,6 +27,17 @@ class NginxDiscoveryTest(unittest.TestCase):
             1000,
         )
 
+    def test_ip_approval_error_is_operator_friendly(self):
+        error = agent.ApiError(403, {
+            "status": "ip_pending_approval",
+            "source_ip": "198.51.100.20",
+            "message": "This source IP is waiting for administrator approval.",
+        })
+
+        self.assertIn("198.51.100.20", str(error))
+        self.assertIn("administrator approval", str(error))
+        self.assertIn("operations were not allowed", str(error))
+
     def test_log_timestamp_uses_fixed_utc_plus_seven_offset(self):
         previous_config = agent.CONFIG
         with tempfile.TemporaryDirectory() as temporary:

@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.13'
+$script:AgentVersion = '1.0.0-rc.14'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -68,6 +68,39 @@ function Unprotect-LocalMachineSecret {
         [Security.Cryptography.DataProtectionScope]::LocalMachine
     )
     return [Text.Encoding]::UTF8.GetString($bytes)
+}
+
+function Get-CertMApiErrorMessage {
+    param([object]$Exception)
+
+    $response = $Exception.Response
+    if (-not $response) { return $Exception.Message }
+
+    $body = ''
+    try {
+        $stream = $response.GetResponseStream()
+        if ($stream) {
+            $reader = New-Object IO.StreamReader($stream)
+            try { $body = $reader.ReadToEnd() }
+            finally { $reader.Dispose() }
+        }
+    }
+    catch { return $Exception.Message }
+
+    if ([string]::IsNullOrWhiteSpace($body)) { return $Exception.Message }
+
+    try {
+        $detail = $body | ConvertFrom-Json
+        if ($detail.status -in @('ip_pending_approval', 'ip_rejected', 'ip_revoked')) {
+            return (
+                "CertM source IP $($detail.source_ip) is blocked: " +
+                "$($detail.message) Certificate and agent-update operations were not allowed."
+            )
+        }
+    }
+    catch { }
+
+    return "$($Exception.Message) Response: $body"
 }
 
 function Read-JsonFile {
@@ -131,7 +164,7 @@ function Invoke-CertMApi {
             $statusCode = [int]$_.Exception.Response.StatusCode
         }
         if ($AllowNotFound -and $statusCode -eq 404) { return $null }
-        throw
+        throw (Get-CertMApiErrorMessage $_.Exception)
     }
 }
 

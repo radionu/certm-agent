@@ -76,6 +76,13 @@ previous runtime if installation fails.
 Only `certm-agent.timer` is enabled. The legacy `certm-agent-update.timer` and
 service are retired automatically after an RC12 client installs RC13.
 
+Version 1.0.0-rc.14 adds clear handling for CertM's multiple-source-IP approval
+policy. When a valid client reaches CertM through a new hospital WAN address,
+the server records the address for administrator review and blocks certificate
+and agent-update operations. Linux and Windows logs now identify the observed
+source IP and state that administrator approval is required instead of showing
+only a generic HTTP 403 error.
+
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key
 pairs, local write paths, reload capacity, and CertM API reachability before

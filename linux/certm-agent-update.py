@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 
 
-UPDATER_VERSION = "1.0.0-rc.13"
+UPDATER_VERSION = "1.0.0-rc.14"
 CONFIG_PATH = Path("/etc/certm/agent.json")
 PUBLIC_KEY_PATH = Path("/etc/certm/update-public.pem")
 LOCK_PATH = Path("/run/certm-agent.lock")
@@ -36,6 +36,32 @@ LEGACY_TARGETS = {
     "linux/systemd/certm-agent-update.timer": Path("/etc/systemd/system/certm-agent-update.timer"),
 }
 TARGETS = {**CORE_TARGETS, **LEGACY_TARGETS}
+
+
+class ApiError(RuntimeError):
+    def __init__(self, code, detail):
+        self.code = int(code)
+        self.detail = detail
+        if isinstance(detail, dict) and detail.get("status") in (
+            "ip_pending_approval",
+            "ip_rejected",
+            "ip_revoked",
+        ):
+            source_ip = str(detail.get("source_ip", "unknown"))
+            message = str(detail.get("message", "Source IP is not approved."))
+            rendered = f"CertM source IP {source_ip} is blocked: {message}"
+        else:
+            rendered = f"CertM API HTTP {self.code}: {detail}"
+        super().__init__(rendered)
+
+
+def api_error(exc):
+    body = exc.read().decode(errors="replace")
+    try:
+        detail = json.loads(body)
+    except Exception:
+        detail = body
+    return ApiError(exc.code, detail)
 
 
 def log(message):
@@ -86,8 +112,11 @@ def api_json(config, token, machine_id, method, path, payload=None):
         request_headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
     timeout = int(config.get("network", {}).get("api_timeout_seconds", 30))
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        raise api_error(exc) from exc
     return json.loads(body.decode("utf-8")) if body else {}
 
 
@@ -129,8 +158,11 @@ def download(config, token, machine_id, path, destination):
     url = str(config["api_base"]).rstrip("/") + str(path)
     request = urllib.request.Request(url, headers=headers(token, machine_id), method="GET")
     timeout = int(config.get("network", {}).get("api_timeout_seconds", 30))
-    with urllib.request.urlopen(request, timeout=timeout) as response, destination.open("wb") as output:
-        shutil.copyfileobj(response, output)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response, destination.open("wb") as output:
+            shutil.copyfileobj(response, output)
+    except urllib.error.HTTPError as exc:
+        raise api_error(exc) from exc
 
 
 def safe_extract(archive, destination):
@@ -329,8 +361,8 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except urllib.error.HTTPError as exc:
-        log(f"CertM updater HTTP error {exc.code}")
+    except ApiError as exc:
+        log(str(exc))
         sys.exit(1)
     except Exception as exc:
         log(f"CertM updater failed: {exc}")

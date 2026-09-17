@@ -83,6 +83,12 @@ and agent-update operations. Linux and Windows logs now identify the observed
 source IP and state that administrator approval is required instead of showing
 only a generic HTTP 403 error.
 
+Version 1.0.0-rc.15 makes the Windows agent refresh IIS inventory immediately
+after a successful certificate deployment. When one certificate is installed
+on multiple hostname bindings, CertM now changes every affected domain to `OK`
+in the same run instead of leaving all but the deployment's primary domain with
+a stale pre-deployment status until the next six-hour cycle.
+
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key
 pairs, local write paths, reload capacity, and CertM API reachability before

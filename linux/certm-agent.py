@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.13"
+AGENT_VERSION = "1.0.0-rc.14"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -48,7 +48,20 @@ class ApiError(RuntimeError):
     def __init__(self, code, detail):
         self.code = int(code)
         self.detail = detail
-        super().__init__(f"CertM API HTTP {self.code}: {detail}")
+        if isinstance(detail, dict) and detail.get("status") in (
+            "ip_pending_approval",
+            "ip_rejected",
+            "ip_revoked",
+        ):
+            source_ip = str(detail.get("source_ip", "unknown"))
+            message = str(detail.get("message", "Source IP is not approved."))
+            rendered = (
+                f"CertM source IP {source_ip} is blocked: {message} "
+                "Certificate and agent-update operations were not allowed."
+            )
+        else:
+            rendered = f"CertM API HTTP {self.code}: {detail}"
+        super().__init__(rendered)
 
 
 @dataclass

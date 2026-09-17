@@ -3,7 +3,7 @@ param([string]$ConfigPath = 'C:\CertM\config.json')
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:UpdaterVersion = '1.0.0-rc.13'
+$script:UpdaterVersion = '1.0.0-rc.14'
 $script:Root = 'C:\CertM'
 $script:Mutex = $null
 $script:Config = $null
@@ -32,6 +32,36 @@ function Unprotect-Secret {
         [Security.Cryptography.DataProtectionScope]::LocalMachine
     )
     return [Text.Encoding]::UTF8.GetString($bytes)
+}
+
+function Get-CertMApiErrorMessage {
+    param([object]$Exception)
+
+    $response = $Exception.Response
+    if (-not $response) { return $Exception.Message }
+
+    $body = ''
+    try {
+        $stream = $response.GetResponseStream()
+        if ($stream) {
+            $reader = New-Object IO.StreamReader($stream)
+            try { $body = $reader.ReadToEnd() }
+            finally { $reader.Dispose() }
+        }
+    }
+    catch { return $Exception.Message }
+
+    if ([string]::IsNullOrWhiteSpace($body)) { return $Exception.Message }
+
+    try {
+        $detail = $body | ConvertFrom-Json
+        if ($detail.status -in @('ip_pending_approval', 'ip_rejected', 'ip_revoked')) {
+            return "CertM source IP $($detail.source_ip) is blocked: $($detail.message)"
+        }
+    }
+    catch { }
+
+    return "$($Exception.Message) Response: $body"
 }
 
 function Get-MachineId {
@@ -75,7 +105,12 @@ function Invoke-UpdateApi {
         $parameters.ContentType = 'application/json'
         $parameters.Body = $Body | ConvertTo-Json -Depth 8 -Compress
     }
-    return Invoke-RestMethod @parameters
+    try {
+        return Invoke-RestMethod @parameters
+    }
+    catch {
+        throw (Get-CertMApiErrorMessage $_.Exception)
+    }
 }
 
 function Send-UpdateReport {

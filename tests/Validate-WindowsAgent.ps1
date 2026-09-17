@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.13'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.14'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -74,6 +74,10 @@ Assert-True ($agent -match '\[switch\]\$SkipUpdateCheck') `
     'The IIS agent must support a non-recursive combined run.'
 Assert-True ($agent -match 'CertM\.Update\.ps1[\s\S]+certificate work will continue') `
     'The IIS task must check updates first without blocking certificate work.'
+Assert-True ($agent -match 'ip_pending_approval[\s\S]+source_ip') `
+    'The IIS agent must explain source-IP approval blocks.'
+Assert-True ($updater -match 'ip_pending_approval[\s\S]+source_ip') `
+    'The Windows updater must explain source-IP approval blocks.'
 Assert-True ($updater -match 'Remove-LegacyUpdateTask') `
     'The managed updater must retire the legacy 15-minute task after RC13 installs.'
 Assert-True ($updater -match '\[Threading\.Mutex\]::new\(\$true, ''Global\\CertM-IIS-Agent''') `

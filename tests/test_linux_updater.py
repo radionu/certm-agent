@@ -107,11 +107,11 @@ class LinuxUpdaterSafetyTest(unittest.TestCase):
             (root / "manifest.json").write_text(json.dumps({
                 "schema": 1,
                 "platform": "linux",
-                "version": "1.0.0-rc.14",
+                "version": "1.0.0-rc.15",
                 "files": files,
             }))
 
-            manifest = UPDATER.verify_manifest(root, "1.0.0-rc.14")
+            manifest = UPDATER.verify_manifest(root, "1.0.0-rc.15")
 
             self.assertEqual(files, manifest["files"])
 

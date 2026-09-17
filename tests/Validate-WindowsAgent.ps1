@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.14'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.15'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -110,6 +110,10 @@ Assert-True ($agent -match 'Skip certificate deployment for inactive IIS site') 
     'IIS deployment must log every inactive binding that it skips.'
 Assert-True ($agent -match 'if \(\$_\.site_state -eq ''Started''\)') `
     'IIS inventory must not attempt live TLS verification for inactive sites.'
+Assert-True ($agent -match 'postDeploymentBindings\s*=\s*@\(Get-IisHttpsBindings\)[\s\S]+Send-Inventory\s+\$postDeploymentBindings') `
+    'IIS must refresh inventory after changing one or more certificate bindings.'
+Assert-True ($agent -match 'Post-deployment inventory failed:[\s\S]+''WARN''') `
+    'A post-deployment inventory failure must be logged without invalidating a successful certificate deployment.'
 Assert-True ($agent -match "Properties\.Remove\('enrollment_token_protected'\)") `
     'The IIS agent must remove the bootstrap credential after enrollment.'
 Assert-True ($installer -match "Properties\.Remove\('enrollment_token_protected'\)") `

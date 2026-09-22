@@ -113,10 +113,6 @@ try {
     $installerPath = $installer[0].FullName
     & $installerPath @installParameters
 
-    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
-        throw "CertM IIS Agent installer exited with code $LASTEXITCODE."
-    }
-
     $installedConfiguration = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 |
         ConvertFrom-Json
     if (

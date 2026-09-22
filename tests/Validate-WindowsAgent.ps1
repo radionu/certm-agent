@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.15'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.16'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -132,6 +132,16 @@ Assert-True (($installer + $uninstaller) -notmatch 'schtasks\.exe') `
     'Windows setup scripts must not depend on schtasks.exe.'
 Assert-True ($installer -match 'if \(\$RunOnce\)') `
     'The IIS installer must guard the initial agent execution with RunOnce.'
+Assert-True ($installer -match 'if \(-not \$runHasStoredClientToken\)[\s\S]+agentArguments \+= ''-SkipUpdateCheck''') `
+    'Initial enrollment must skip the update check until a client identity exists.'
+Assert-True ($installer -match 'initialRunExitCode[\s\S]+lastAgentError[\s\S]+Last agent error') `
+    'The installer must surface the final agent error when the requested initial run fails.'
+Assert-True ($bootstrap -notmatch 'installer exited with code') `
+    'The bootstrap must not replace a specific installer exception with a stale native exit code.'
+Assert-True ($agent -match 'Unable to connect to CertM API[\s\S]+outbound TCP 443') `
+    'Windows API connection failures must include actionable network checks.'
+Assert-True ($agent -match 'CertM agent failed:') `
+    'The Windows agent must log a concise top-level failure message.'
 Assert-True ($installer -match 'existingTaskWasEnabled') `
     'The IIS upgrade path must preserve the existing certificate-task state.'
 $assemblyLoad = $installer.IndexOf('Add-Type -AssemblyName System.Security')

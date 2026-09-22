@@ -89,6 +89,12 @@ on multiple hostname bindings, CertM now changes every affected domain to `OK`
 in the same run instead of leaving all but the deployment's primary domain with
 a stale pre-deployment status until the next six-hour cycle.
 
+Version 1.0.0-rc.16 makes initial Windows enrollment failures actionable. The
+first enrollment attempt no longer runs a premature update check, connection
+failures identify the CertM API and the DNS, TCP 443, firewall/proxy, clock, and
+TLS trust checks to perform, and the installer prints the final agent error
+instead of replacing it with a generic installer exit code.
+
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key
 pairs, local write paths, reload capacity, and CertM API reachability before

@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.15'
+$script:AgentVersion = '1.0.0-rc.16'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -74,7 +74,14 @@ function Get-CertMApiErrorMessage {
     param([object]$Exception)
 
     $response = $Exception.Response
-    if (-not $response) { return $Exception.Message }
+    if (-not $response) {
+        $apiBase = [string]$script:Config.api_base
+        return (
+            "Unable to connect to CertM API $apiBase. $($Exception.Message) " +
+            'Check DNS resolution, outbound TCP 443, firewall or proxy settings, ' +
+            'system time, and TLS certificate trust.'
+        )
+    }
 
     $body = ''
     try {
@@ -652,7 +659,7 @@ try {
     }
 }
 catch {
-    try { Write-CertMLog $_.Exception.ToString() 'ERROR' } catch { }
+    try { Write-CertMLog "CertM agent failed: $($_.Exception.Message)" 'ERROR' } catch { }
     exit 1
 }
 finally {

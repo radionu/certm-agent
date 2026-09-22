@@ -152,7 +152,7 @@ if ($null -ne (Get-ScheduledTask -TaskName $legacyUpdateTaskName -ErrorAction Si
     Unregister-ScheduledTask -TaskName $legacyUpdateTaskName -Confirm:$false -ErrorAction Stop
 }
 
-Write-Host "CertM IIS Agent 1.0.0-rc.15 installed."
+Write-Host "CertM IIS Agent 1.0.0-rc.16 installed."
 Write-Host "Configuration: $configPath"
 if ($shouldEnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"
@@ -163,9 +163,43 @@ else {
 Write-Host 'Agent update checks run inside the six-hour certificate task.'
 
 if ($RunOnce) {
-    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $agentPath
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "The requested initial run failed. Review $root\logs\agent.log"
+    $agentArguments = @(
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        $agentPath
+    )
+    $runHasStoredClientToken = (
+        $config.PSObject.Properties.Name -contains 'client_token_protected' -and
+        -not [string]::IsNullOrWhiteSpace([string]$config.client_token_protected)
+    )
+    if (-not $runHasStoredClientToken) {
+        $agentArguments += '-SkipUpdateCheck'
+    }
+
+    & powershell.exe @agentArguments
+    $initialRunExitCode = $LASTEXITCODE
+    if ($initialRunExitCode -ne 0) {
+        $agentLogPath = Join-Path $root 'logs\agent.log'
+        $lastAgentError = $null
+        if (Test-Path -LiteralPath $agentLogPath) {
+            $lastAgentError = Get-Content -LiteralPath $agentLogPath -Encoding UTF8 |
+                Where-Object { $_ -match '\[ERROR\]' } |
+                Select-Object -Last 1
+        }
+        $failureMessage = (
+            "CertM IIS Agent files and scheduled task were installed, but the " +
+            "requested initial run failed with exit code $initialRunExitCode."
+        )
+        if (-not [string]::IsNullOrWhiteSpace([string]$lastAgentError)) {
+            $failureMessage += " Last agent error: $lastAgentError"
+        }
+        else {
+            $failureMessage += " Review $agentLogPath"
+        }
+        throw $failureMessage
     }
     else {
         if (-not $existingConfiguration -or $Force) {

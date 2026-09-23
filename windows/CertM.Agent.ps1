@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.16'
+$script:AgentVersion = '1.0.0-rc.17'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -279,6 +279,17 @@ function Set-IisBindingCertificate {
     $webBinding.AddSslCertificate($Thumbprint, $StoreName)
 }
 
+function Set-IisBindingSslFlags {
+    param([object]$Binding, [int]$SslFlags)
+
+    Set-WebBinding `
+        -Name $Binding.site_name `
+        -BindingInformation $Binding.binding_information `
+        -PropertyName 'sslFlags' `
+        -Value ([string]$SslFlags) `
+        -ErrorAction Stop
+}
+
 function Get-ServedFingerprint {
     param([object]$Binding)
     $connectHost = $script:Config.verify_connect_host
@@ -409,6 +420,13 @@ function Install-DeploymentGroup {
                 binding = $plan.binding
                 thumbprint = $plan.binding.thumbprint
                 store_name = $plan.binding.store_name
+                ssl_flags = [int]$plan.binding.ssl_flags
+            }
+
+            $newSslFlags = ([int]$plan.binding.ssl_flags -bor 1)
+            if ($newSslFlags -ne [int]$plan.binding.ssl_flags) {
+                Set-IisBindingSslFlags $plan.binding $newSslFlags
+                Write-CertMLog "Enabled IIS SNI for hostname binding $($plan.binding.binding_id)."
             }
             Set-IisBindingCertificate $plan.binding $imported.Thumbprint 'My'
         }
@@ -432,10 +450,13 @@ function Install-DeploymentGroup {
     catch {
         $failure = $_.Exception.Message
         foreach ($old in $oldBindings) {
-            if ($old.thumbprint) {
-                try { Set-IisBindingCertificate $old.binding $old.thumbprint $old.store_name }
-                catch { Write-CertMLog "Rollback failed for $($old.binding.binding_id): $($_.Exception.Message)" 'ERROR' }
+            try {
+                Set-IisBindingSslFlags $old.binding ([int]$old.ssl_flags)
+                if ($old.thumbprint) {
+                    Set-IisBindingCertificate $old.binding $old.thumbprint $old.store_name
+                }
             }
+            catch { Write-CertMLog "Rollback failed for $($old.binding.binding_id): $($_.Exception.Message)" 'ERROR' }
         }
         try { Send-DeploymentReport $deploymentId 'FAILED' $Token $MachineId $null $null "Installation failed and rollback attempted: $failure" }
         catch { Write-CertMLog "Could not report failed deployment: $($_.Exception.Message)" 'ERROR' }

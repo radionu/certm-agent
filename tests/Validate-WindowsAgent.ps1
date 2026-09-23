@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.16'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.17'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -116,6 +116,14 @@ Assert-True ($agent -match 'postDeploymentBindings\s*=\s*@\(Get-IisHttpsBindings
     'IIS must refresh inventory after changing one or more certificate bindings.'
 Assert-True ($agent -match 'Post-deployment inventory failed:[\s\S]+''WARN''') `
     'A post-deployment inventory failure must be logged without invalidating a successful certificate deployment.'
+Assert-True ($agent -match 'function\s+Set-IisBindingSslFlags[\s\S]+Set-WebBinding[\s\S]+-PropertyName\s+''sslFlags''') `
+    'IIS hostname binding updates must be able to enable SNI through the WebAdministration module.'
+Assert-True ($agent -match '\$newSslFlags\s*=\s*\(\[int\]\$plan\.binding\.ssl_flags\s+-bor\s+1\)') `
+    'IIS deployment must add the SNI flag without discarding other SSL flags.'
+Assert-True ($agent -match 'ssl_flags\s*=\s*\[int\]\$plan\.binding\.ssl_flags') `
+    'IIS deployment must retain the original SSL flags for rollback.'
+Assert-True ($agent -match 'Set-IisBindingSslFlags\s+\$old\.binding\s+\(\[int\]\$old\.ssl_flags\)') `
+    'IIS rollback must restore the original SSL flags.'
 Assert-True ($agent -match "Properties\.Remove\('enrollment_token_protected'\)") `
     'The IIS agent must remove the bootstrap credential after enrollment.'
 Assert-True ($installer -match "Properties\.Remove\('enrollment_token_protected'\)") `

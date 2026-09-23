@@ -441,7 +441,7 @@ class NginxRenewPlanningTest(unittest.TestCase):
                 mock.patch.object(agent, "push_inventory") as inventory, \
                 mock.patch.object(agent, "desired_for", side_effect=desired_values), \
                 mock.patch.object(agent, "deploy_group", return_value=deploy_changed) as deploy, \
-                mock.patch.object(agent, "deploy_split_group", return_value=False) as split:
+                mock.patch.object(agent, "deploy_split_group", return_value=deploy_changed) as split:
             agent.renew(dry_run=dry_run)
             self.discover = discover
             self.inventory = inventory
@@ -471,11 +471,11 @@ class NginxRenewPlanningTest(unittest.TestCase):
         deploy.assert_not_called()
         split.assert_called_once()
 
-    def test_dry_run_is_forwarded_without_local_mutation(self):
+    def test_nginx_always_uses_managed_deployment_paths(self):
         deploy, split = self.renew_with([self.desired, self.desired], dry_run=True)
-        deploy.assert_called_once()
-        self.assertTrue(deploy.call_args.args[-1])
-        split.assert_not_called()
+        deploy.assert_not_called()
+        split.assert_called_once()
+        self.assertTrue(split.call_args.args[-1])
         self.discover.assert_called_once_with()
         self.inventory.assert_called_once_with(self.bindings, "token", "machine")
 
@@ -490,8 +490,8 @@ class NginxRenewPlanningTest(unittest.TestCase):
             post_bindings=refreshed,
         )
 
-        deploy.assert_called_once()
-        split.assert_not_called()
+        deploy.assert_not_called()
+        split.assert_called_once()
         self.assertEqual(self.discover.call_count, 2)
         self.assertEqual(
             self.inventory.call_args_list,
@@ -545,11 +545,21 @@ class NginxConfigSplitTest(unittest.TestCase):
             "fingerprint_sha256": fingerprint,
         }
 
-    def fixture(self, root, same_server=False, certbot_comments=False):
+    def fixture(
+        self,
+        root,
+        same_server=False,
+        certbot_comments=False,
+        certbot_paths=False,
+    ):
         root = Path(root)
         config_path = root / "nginx" / "conf.d" / "sites.conf"
         config_path.parent.mkdir(parents=True)
-        shared = root / "nginx" / "ssl" / "shared"
+        shared = (
+            root / "letsencrypt" / "live" / "shared"
+            if certbot_paths
+            else root / "nginx" / "ssl" / "shared"
+        )
         shared.mkdir(parents=True)
         (shared / "fullchain.pem").write_text("old certificate")
         (shared / "privkey.pem").write_text("old key")
@@ -617,9 +627,27 @@ server {{
             self.assertEqual(len(targets), 2)
             self.assertEqual(untouched, [])
             self.assertEqual(
-                {Path(item["paths"]["certificate_path"]).parent.name for item in targets},
+                {
+                    Path(item["paths"]["certificate_path"]).parent.parent.name
+                    for item in targets
+                },
                 {"certificate-10", "certificate-11"},
             )
+            self.assertEqual(
+                {Path(item["paths"]["certificate_path"]).parent.name for item in targets},
+                {"260901-r1-c10", "260901-r1-c11"},
+            )
+
+    def test_managed_path_rejects_unsafe_deployment_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            old = self.configure(temporary)
+            desired = self.desired(10, "a" * 64)
+            desired["deployment_revision"] = "../../certbot"
+            try:
+                with self.assertRaisesRegex(RuntimeError, "not safe"):
+                    agent.managed_certificate_paths(desired)
+            finally:
+                agent.CONFIG = old
 
     def test_one_server_block_cannot_receive_different_profiles(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -650,8 +678,8 @@ server {{
             self.assertIn("server_name a.pmr.vn;", rendered)
             self.assertIn("server_name b.pmr.vn;", rendered)
             self.assertNotEqual(rendered, original)
-            self.assertIn("certificate-10/fullchain.pem", rendered)
-            self.assertIn("certificate-11/fullchain.pem", rendered)
+            self.assertIn("certificate-10/260901-r1-c10/fullchain.pem", rendered)
+            self.assertIn("certificate-11/260901-r1-c11/fullchain.pem", rendered)
             self.assertNotIn("ssl/shared/fullchain.pem", rendered)
 
     def test_render_replaces_stale_certbot_ownership_comments(self):
@@ -698,6 +726,59 @@ server {{
             self.assertEqual(config_path.read_text(), original)
             self.assertFalse((Path(temporary) / "managed").exists())
 
+    def test_current_versioned_managed_files_are_not_downloaded_again(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, _, bindings = self.fixture(temporary)
+            old = self.configure(temporary)
+            desired_values = [
+                self.desired(10, "a" * 64),
+                self.desired(11, "b" * 64),
+            ]
+            try:
+                managed_bindings = []
+                for binding, desired in zip(bindings, desired_values):
+                    paths = agent.managed_certificate_paths(desired)
+                    Path(paths["certificate_write_path"]).parent.mkdir(
+                        parents=True,
+                        exist_ok=True,
+                    )
+                    Path(paths["certificate_write_path"]).write_text("certificate")
+                    Path(paths["key_write_path"]).write_text("key")
+                    managed_bindings.append(
+                        agent.binding_with_managed_paths(binding, paths)
+                    )
+
+                def fingerprint(path):
+                    return "a" * 64 if "certificate-10" in str(path) else "b" * 64
+
+                with mock.patch.object(
+                    agent,
+                    "fingerprint_file",
+                    side_effect=fingerprint,
+                ), mock.patch.object(
+                    agent,
+                    "verify_served",
+                    side_effect=lambda _, expected: expected,
+                ), mock.patch.object(
+                    agent,
+                    "save_state",
+                ) as save_state, mock.patch.object(
+                    agent,
+                    "api_request",
+                ) as request:
+                    changed = agent.deploy_split_group(
+                        managed_bindings,
+                        desired_values,
+                        "token",
+                        "machine",
+                    )
+            finally:
+                agent.CONFIG = old
+
+            self.assertFalse(changed)
+            request.assert_not_called()
+            self.assertEqual(save_state.call_count, 2)
+
     def test_reload_failure_restores_config_and_removes_new_managed_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_path, original, bindings = self.fixture(temporary)
@@ -743,12 +824,34 @@ server {{
                 agent.CONFIG = old
 
             self.assertEqual(config_path.read_text(), original)
-            self.assertFalse((Path(temporary) / "managed" / "certificate-10" / "fullchain.pem").exists())
-            self.assertFalse((Path(temporary) / "managed" / "certificate-11" / "fullchain.pem").exists())
+            self.assertFalse(
+                (
+                    Path(temporary)
+                    / "managed"
+                    / "certificate-10"
+                    / "260901-r1-c10"
+                    / "fullchain.pem"
+                ).exists()
+            )
+            self.assertFalse(
+                (
+                    Path(temporary)
+                    / "managed"
+                    / "certificate-11"
+                    / "260901-r1-c11"
+                    / "fullchain.pem"
+                ).exists()
+            )
 
-    def test_successful_split_installs_both_profiles_and_updates_config(self):
+    def test_successful_managed_deployment_leaves_certbot_files_untouched(self):
         with tempfile.TemporaryDirectory() as temporary:
-            config_path, _, bindings = self.fixture(temporary)
+            config_path, _, bindings = self.fixture(
+                temporary,
+                certbot_comments=True,
+                certbot_paths=True,
+            )
+            original_certificate = Path(bindings[0]["certificate_write_path"])
+            original_key = Path(bindings[0]["key_write_path"])
             old = self.configure(temporary)
             desired_values = [
                 self.desired(10, "a" * 64),
@@ -792,10 +895,30 @@ server {{
 
             self.assertTrue(changed)
             rendered = config_path.read_text()
-            self.assertIn("certificate-10/fullchain.pem", rendered)
-            self.assertIn("certificate-11/fullchain.pem", rendered)
-            self.assertTrue((Path(temporary) / "managed" / "certificate-10" / "privkey.pem").exists())
-            self.assertTrue((Path(temporary) / "managed" / "certificate-11" / "privkey.pem").exists())
+            self.assertIn("certificate-10/260901-r1-c10/fullchain.pem", rendered)
+            self.assertIn("certificate-11/260901-r1-c11/fullchain.pem", rendered)
+            self.assertNotIn("managed by Certbot", rendered)
+            self.assertIn("letsencrypt/live", str(original_certificate))
+            self.assertEqual(original_certificate.read_text(), "old certificate")
+            self.assertEqual(original_key.read_text(), "old key")
+            self.assertTrue(
+                (
+                    Path(temporary)
+                    / "managed"
+                    / "certificate-10"
+                    / "260901-r1-c10"
+                    / "privkey.pem"
+                ).exists()
+            )
+            self.assertTrue(
+                (
+                    Path(temporary)
+                    / "managed"
+                    / "certificate-11"
+                    / "260901-r1-c11"
+                    / "privkey.pem"
+                ).exists()
+            )
             reload_webserver.assert_called_once()
             self.assertEqual(report.call_count, 2)
 

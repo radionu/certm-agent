@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.18"
+AGENT_VERSION = "1.0.0-rc.19"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -1381,6 +1381,9 @@ def managed_certificate_paths(desired):
     certificate_id = int(desired["certificate_id"])
     if certificate_id < 1:
         raise RuntimeError("Desired certificate_id must be positive")
+    revision = str(desired.get("deployment_revision", "")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", revision):
+        raise RuntimeError("Desired deployment_revision is not safe for a managed path")
     root = Path(
         CONFIG.get("paths", {}).get(
             "managed_certificate_root",
@@ -1388,7 +1391,7 @@ def managed_certificate_paths(desired):
         )
     )
     allowed_roots = CONFIG.get("discovery", {}).get("allowed_certificate_roots", [])
-    directory = root / f"certificate-{certificate_id}"
+    directory = root / f"certificate-{certificate_id}" / revision
     certificate = directory / "fullchain.pem"
     key = directory / "privkey.pem"
     certificate_write = certificate.resolve(strict=False)
@@ -1815,8 +1818,49 @@ def deploy_group(bindings, desired, token, machine_id, dry_run=False):
         raise RuntimeError(f"Deployment failed: {failure}. {rollback_text}")
 
 
+def managed_target_is_current(target, dry_run=False):
+    desired = target["desired"]
+    paths = target["paths"]
+    expected = normalize_fingerprint(desired.get("fingerprint_sha256"))
+    managed_certificate = paths["certificate_write_path"]
+    managed_key = paths["key_write_path"]
+
+    for binding in target["bindings"]:
+        if (
+            binding["certificate_write_path"] != managed_certificate
+            or binding["key_write_path"] != managed_key
+        ):
+            return False
+
+    if fingerprint_file(managed_certificate) != expected:
+        return False
+
+    try:
+        for binding in target["bindings"]:
+            verify_served(binding, expected)
+    except Exception as exc:
+        warn(f"Managed certificate matches but served verification failed; redeploying: {exc}")
+        return False
+
+    if not dry_run:
+        for binding in target["bindings"]:
+            save_state(binding, desired, expected)
+
+    domains = sorted({binding["domain"] for binding in target["bindings"]})
+    log(
+        f"Managed certificate {desired['deployment_revision']} is current and verified for "
+        f"{format_domains(domains)}"
+    )
+    return True
+
+
 def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=False):
     targets, untouched = split_plan(bindings, desired_values)
+    targets = [
+        target
+        for target in targets
+        if not managed_target_is_current(target, dry_run)
+    ]
     if not targets:
         return False
 
@@ -1824,7 +1868,7 @@ def deploy_split_group(bindings, desired_values, token, machine_id, dry_run=Fals
         domains = sorted({binding["domain"] for binding in target["bindings"]})
         paths = target["paths"]
         log(
-            f"{'DRY RUN would split' if dry_run else 'Splitting'} {service_type()} config for "
+            f"{'DRY RUN would manage' if dry_run else 'Managing'} {service_type()} config for "
             f"{format_domains(domains)} -> {paths['certificate_path']}"
         )
     if untouched:
@@ -2062,7 +2106,15 @@ def renew(dry_run=False):
                 )
                 continue
             identities = {desired_identity(value) for value in present}
-            if len(present) == len(group) and len(identities) == 1:
+            if service_type() == "nginx":
+                changed_now = deploy_split_group(
+                    group,
+                    desired_values,
+                    token,
+                    machine_id,
+                    dry_run,
+                )
+            elif len(present) == len(group) and len(identities) == 1:
                 changed_now = deploy_group(group, present[0], token, machine_id, dry_run)
             else:
                 changed_now = deploy_split_group(

@@ -1,4 +1,4 @@
-# CertM Linux Agent 1.0.0-rc.18
+# CertM Linux Agent 1.0.0-rc.19
 
 One pull-based API v2 agent and installer for:
 
@@ -108,6 +108,8 @@ nginx discovery uses `nginx -T`. Apache discovery uses the running Apache build'
 - reject variable certificate paths and ambiguous domain/port mappings;
 - restrict certificate and configuration paths to configured safety roots;
 - group virtual hosts that share certificate files;
+- move every CertM-assigned nginx virtual host to a CertM-owned, versioned path;
+- leave Certbot and other externally managed certificate/key files untouched;
 - split configuration safely when separate virtual hosts need different CertM profiles;
 - refuse different assignments inside one indivisible virtual-host block;
 - validate certificate/key matching, fullchain order, and hostname coverage;
@@ -131,7 +133,7 @@ new worker generation was actually created instead of trusting a successful exit
 
 - Configuration: `/etc/certm/agent.json` (mode `0600`)
 - Runtime: `/opt/certm-agent`
-- Managed certificates: `/etc/certm/live`
+- Managed certificates: `/etc/certm/live/certificate-<id>/<deployment-revision>/`
 - State: `/var/lib/certm/bindings`
 - Backups: `/opt/certm-agent/bkup`
 - Log: `/var/log/certm/certm-agent.log`

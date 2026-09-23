@@ -101,6 +101,13 @@ continuing to serve the default IP:port certificate on shared `*:443` bindings.
 If installation or live TLS verification fails, the agent restores both the
 previous certificate and the original IIS SSL flags.
 
+Version 1.0.0-rc.18 identifies certificate substitution performed by Kaspersky
+Endpoint Security during local TLS verification. It still rolls IIS back and
+reports the deployment as failed, but now sends the observed certificate
+subject, issuer, and fingerprint with a dedicated
+`TLS_INTERCEPTION_DETECTED` code so CertM operators can keep, suspend, or
+remove the affected assignment without treating it as an IIS repair.
+
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key
 pairs, local write paths, reload capacity, and CertM API reachability before

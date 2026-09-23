@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.17'
+$script:AgentVersion = '1.0.0-rc.18'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -290,7 +290,7 @@ function Set-IisBindingSslFlags {
         -ErrorAction Stop
 }
 
-function Get-ServedFingerprint {
+function Get-ServedCertificate {
     param([object]$Binding)
     $connectHost = $script:Config.verify_connect_host
     if ([string]::IsNullOrWhiteSpace($connectHost)) {
@@ -314,7 +314,14 @@ function Get-ServedFingerprint {
         $ssl = [Net.Security.SslStream]::new($tcp.GetStream(), $false, $callback)
         $ssl.AuthenticateAsClient($Binding.domain)
         $remoteCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($ssl.RemoteCertificate)
-        try { return Get-Sha256Fingerprint $remoteCertificate }
+        try {
+            return [pscustomobject]@{
+                fingerprint = Normalize-Fingerprint (Get-Sha256Fingerprint $remoteCertificate)
+                thumbprint = Normalize-Fingerprint $remoteCertificate.Thumbprint
+                subject = [string]$remoteCertificate.Subject
+                issuer = [string]$remoteCertificate.Issuer
+            }
+        }
         finally { $remoteCertificate.Dispose() }
     }
     finally {
@@ -323,23 +330,55 @@ function Get-ServedFingerprint {
     }
 }
 
+function Test-TlsInspectionCertificate {
+    param([object]$Certificate)
+
+    if (-not $Certificate) { return $false }
+
+    return (
+        [string]$Certificate.issuer -match
+        'Kaspersky Endpoint Security Personal Certification Authority'
+    )
+}
+
 function Wait-ServedFingerprint {
     param([object]$Binding, [string]$ExpectedFingerprint)
 
     $deadline = (Get-Date).AddSeconds([int]$script:Config.verify_retry_timeout_seconds)
     $lastResult = $null
+    $lastCertificate = $null
     do {
         try {
-            $lastResult = Normalize-Fingerprint (Get-ServedFingerprint $Binding)
+            $lastCertificate = Get-ServedCertificate $Binding
+            $lastResult = Normalize-Fingerprint $lastCertificate.fingerprint
             if ($lastResult -eq $ExpectedFingerprint) { return $lastResult }
         }
         catch {
+            $lastCertificate = $null
             $lastResult = "ERROR: $($_.Exception.Message)"
         }
         Start-Sleep -Seconds ([int]$script:Config.verify_retry_interval_seconds)
     } while ((Get-Date) -lt $deadline)
 
-    throw "IIS did not serve the expected certificate for $($Binding.binding_id); last result: $lastResult"
+    $failureCode = 'SERVED_CERTIFICATE_MISMATCH'
+    $message = "IIS did not serve the expected certificate for $($Binding.binding_id); last result: $lastResult"
+    if (Test-TlsInspectionCertificate $lastCertificate) {
+        $failureCode = 'TLS_INTERCEPTION_DETECTED'
+        $message = (
+            "TLS interception detected for $($Binding.binding_id); " +
+            "issuer=$($lastCertificate.issuer); subject=$($lastCertificate.subject); " +
+            "served_fingerprint=$lastResult"
+        )
+    }
+
+    $failure = [InvalidOperationException]::new($message)
+    $failure.Data['failure_code'] = $failureCode
+    if ($lastCertificate) {
+        $failure.Data['served_fingerprint'] = [string]$lastCertificate.fingerprint
+        $failure.Data['served_certificate_subject'] = [string]$lastCertificate.subject
+        $failure.Data['served_certificate_issuer'] = [string]$lastCertificate.issuer
+    }
+    throw $failure
 }
 
 function Send-DeploymentReport {
@@ -350,7 +389,10 @@ function Send-DeploymentReport {
         [string]$MachineId,
         [AllowNull()][string]$InstalledFingerprint,
         [AllowNull()][string]$ServedFingerprint,
-        [string]$Message
+        [string]$Message,
+        [AllowNull()][string]$FailureCode = $null,
+        [AllowNull()][string]$ServedCertificateSubject = $null,
+        [AllowNull()][string]$ServedCertificateIssuer = $null
     )
     $body = [ordered]@{
         deployment_id = $DeploymentId
@@ -358,6 +400,9 @@ function Send-DeploymentReport {
         installed_fingerprint = $InstalledFingerprint
         served_fingerprint = $ServedFingerprint
         message = $Message
+        failure_code = $FailureCode
+        served_certificate_subject = $ServedCertificateSubject
+        served_certificate_issuer = $ServedCertificateIssuer
     }
     Invoke-CertMApi POST '/deployment/report' $Token $MachineId $body | Out-Null
 }
@@ -399,6 +444,8 @@ function Install-DeploymentGroup {
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
     $pfxPath = Join-Path $stagingDirectory ("{0}-{1}.pfx" -f $desired.deployment_revision, [Guid]::NewGuid().ToString('N'))
     $oldBindings = @()
+    $installedFingerprint = $null
+    $servedFingerprint = $null
 
     try {
         [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($package.files.'certificate.pfx'))
@@ -448,7 +495,13 @@ function Install-DeploymentGroup {
         Write-CertMLog "Installed $($desired.deployment_revision) on $($Plans.Count) IIS binding(s)."
     }
     catch {
-        $failure = $_.Exception.Message
+        $failureException = $_.Exception
+        $failure = $failureException.Message
+        $failureCode = [string]$failureException.Data['failure_code']
+        $servedFingerprint = [string]$failureException.Data['served_fingerprint']
+        $servedCertificateSubject = [string]$failureException.Data['served_certificate_subject']
+        $servedCertificateIssuer = [string]$failureException.Data['served_certificate_issuer']
+
         foreach ($old in $oldBindings) {
             try {
                 Set-IisBindingSslFlags $old.binding ([int]$old.ssl_flags)
@@ -458,7 +511,30 @@ function Install-DeploymentGroup {
             }
             catch { Write-CertMLog "Rollback failed for $($old.binding.binding_id): $($_.Exception.Message)" 'ERROR' }
         }
-        try { Send-DeploymentReport $deploymentId 'FAILED' $Token $MachineId $null $null "Installation failed and rollback attempted: $failure" }
+
+        $reportMessage = "Installation failed and rollback attempted: $failure"
+        if ($failureCode -eq 'TLS_INTERCEPTION_DETECTED') {
+            $reportMessage = (
+                'Customer-managed TLS inspection detected; IIS rollback attempted. ' +
+                'No IIS repair is required. CertM administrator must keep, suspend, or remove the assignment. ' +
+                $failure
+            )
+            Write-CertMLog $reportMessage 'WARN'
+        }
+
+        $reportParameters = @{
+            DeploymentId = $deploymentId
+            Status = 'FAILED'
+            Token = $Token
+            MachineId = $MachineId
+            InstalledFingerprint = $installedFingerprint
+            ServedFingerprint = $servedFingerprint
+            Message = $reportMessage
+            FailureCode = $failureCode
+            ServedCertificateSubject = $servedCertificateSubject
+            ServedCertificateIssuer = $servedCertificateIssuer
+        }
+        try { Send-DeploymentReport @reportParameters }
         catch { Write-CertMLog "Could not report failed deployment: $($_.Exception.Message)" 'ERROR' }
         throw
     }
@@ -680,6 +756,17 @@ try {
     }
 }
 catch {
+    if (([string]$_.Exception.Data['failure_code']) -eq 'TLS_INTERCEPTION_DETECTED') {
+        try {
+            Write-CertMLog (
+                'TLS interception was recorded for administrator review; ' +
+                'no IIS repair is required and this scheduled run is complete.'
+            ) 'WARN'
+        }
+        catch { }
+        exit 0
+    }
+
     try { Write-CertMLog "CertM agent failed: $($_.Exception.Message)" 'ERROR' } catch { }
     exit 1
 }

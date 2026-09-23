@@ -1,4 +1,4 @@
-# CertM Linux Agent 1.0.0-rc.17
+# CertM Linux Agent 1.0.0-rc.18
 
 One pull-based API v2 agent and installer for:
 

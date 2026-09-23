@@ -3,7 +3,7 @@ param([string]$ConfigPath = 'C:\CertM\config.json')
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:UpdaterVersion = '1.0.0-rc.17'
+$script:UpdaterVersion = '1.0.0-rc.18'
 $script:Root = 'C:\CertM'
 $script:Mutex = $null
 $script:Config = $null

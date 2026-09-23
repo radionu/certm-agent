@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.17'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.18'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -124,6 +124,18 @@ Assert-True ($agent -match 'ssl_flags\s*=\s*\[int\]\$plan\.binding\.ssl_flags') 
     'IIS deployment must retain the original SSL flags for rollback.'
 Assert-True ($agent -match 'Set-IisBindingSslFlags\s+\$old\.binding\s+\(\[int\]\$old\.ssl_flags\)') `
     'IIS rollback must restore the original SSL flags.'
+Assert-True ($agent -match 'TLS_INTERCEPTION_DETECTED') `
+    'IIS verification must classify recognized local TLS inspection.'
+Assert-True ($agent -match 'Kaspersky Endpoint Security Personal Certification Authority') `
+    'IIS verification must recognize the confirmed Kaspersky interception issuer.'
+Assert-True ($agent -match 'served_certificate_subject\s*=\s*\$ServedCertificateSubject') `
+    'Failed deployment reports must include the observed certificate subject.'
+Assert-True ($agent -match 'served_certificate_issuer\s*=\s*\$ServedCertificateIssuer') `
+    'Failed deployment reports must include the observed certificate issuer.'
+Assert-True ($agent -match 'InstalledFingerprint\s*=\s*\$installedFingerprint') `
+    'Failed deployment reports must preserve the imported certificate fingerprint.'
+Assert-True ($agent -match "TLS interception was recorded[\s\S]+exit 0") `
+    'A handled TLS interception must not leave the Windows scheduled task failed.'
 Assert-True ($agent -match "Properties\.Remove\('enrollment_token_protected'\)") `
     'The IIS agent must remove the bootstrap credential after enrollment.'
 Assert-True ($installer -match "Properties\.Remove\('enrollment_token_protected'\)") `

@@ -95,6 +95,12 @@ failures identify the CertM API and the DNS, TCP 443, firewall/proxy, clock, and
 TLS trust checks to perform, and the installer prints the final agent error
 instead of replacing it with a generic installer exit code.
 
+Version 1.0.0-rc.17 enables SNI before assigning a certificate to an IIS
+hostname binding that did not already require SNI. This prevents HTTP.sys from
+continuing to serve the default IP:port certificate on shared `*:443` bindings.
+If installation or live TLS verification fails, the agent restores both the
+previous certificate and the original IIS SSL flags.
+
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key
 pairs, local write paths, reload capacity, and CertM API reachability before

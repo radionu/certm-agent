@@ -115,7 +115,8 @@ makes the CertM-owned versioned paths readable for operators: wildcard
 exact certificate uses its full domain. nginx configuration is updated only
 after staging, then tested, reloaded, and verified with full rollback on failure.
 Existing RC19 ID-based directories are left untouched when nginx migrates to the
-new path.
+new path. Version 1.0.0-rc.21 preserves the installer-selected Python 3.8+
+runtime when Linux agents update themselves.
 
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key

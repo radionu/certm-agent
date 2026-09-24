@@ -2,6 +2,8 @@ import hashlib
 import importlib.util
 import io
 import json
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -18,6 +20,43 @@ SPEC.loader.exec_module(UPDATER)
 
 
 class LinuxUpdaterSafetyTest(unittest.TestCase):
+    def test_legacy_launcher_selects_an_available_python_38_or_newer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            binaries = Path(temporary)
+            old_python = binaries / "python3"
+            old_python.write_text("#!/bin/sh\nexit 1\n")
+            old_python.chmod(0o755)
+            (binaries / "python3.8").symlink_to(sys.executable)
+
+            result = subprocess.run(
+                [
+                    "/bin/sh",
+                    str(ROOT / "linux" / "certm-agent.py"),
+                    "--help",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env={"PATH": str(binaries)},
+                timeout=30,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CertM API v2 Linux web-server agent", result.stdout)
+
+    def test_installer_pinned_entrypoints_remain_valid_python(self):
+        for relative in (
+            "linux/certm-agent.py",
+            "linux/certm-agent-update.py",
+        ):
+            source = (ROOT / relative).read_text()
+            self.assertTrue(source.startswith("#!/bin/sh\n"))
+            pinned = (
+                f"#!{sys.executable}\n"
+                + source.split("\n", 1)[1]
+            )
+            compile(pinned, relative, "exec")
+
     def test_copy_atomic_pins_executable_scripts_to_running_python(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -66,13 +105,13 @@ class LinuxUpdaterSafetyTest(unittest.TestCase):
         ), mock.patch.object(
             UPDATER,
             "installed_version",
-            return_value="1.0.0-rc.21",
+            return_value="1.0.0-rc.22",
         ):
             with self.assertRaisesRegex(
                 RuntimeError,
                 "exit_code=1.*requires Python 3.8 or newer",
             ):
-                UPDATER.self_test("1.0.0-rc.21")
+                UPDATER.self_test("1.0.0-rc.22")
 
     def test_ip_approval_error_is_operator_friendly(self):
         error = UPDATER.ApiError(403, {

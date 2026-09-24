@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.19"
+AGENT_VERSION = "1.0.0-rc.20"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -1377,6 +1377,34 @@ def binding_groups(bindings):
     return [groups[key] for key in sorted(groups)]
 
 
+def managed_certificate_directory_name(desired):
+    pattern = str(
+        desired.get("certificate_primary_domain")
+        or desired.get("matched_pattern")
+        or desired.get("domain")
+        or ""
+    ).strip().lower().rstrip(".")
+    if pattern.startswith("*."):
+        pattern = pattern[2:]
+
+    labels = pattern.split(".")
+    if (
+        not pattern
+        or len(pattern) > 253
+        or len(labels) < 2
+        or any(
+            len(label) > 63
+            or not re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+                label,
+            )
+            for label in labels
+        )
+    ):
+        raise RuntimeError("Desired certificate domain is not safe for a managed path")
+    return pattern
+
+
 def managed_certificate_paths(desired):
     certificate_id = int(desired["certificate_id"])
     if certificate_id < 1:
@@ -1391,7 +1419,7 @@ def managed_certificate_paths(desired):
         )
     )
     allowed_roots = CONFIG.get("discovery", {}).get("allowed_certificate_roots", [])
-    directory = root / f"certificate-{certificate_id}" / revision
+    directory = root / managed_certificate_directory_name(desired) / revision
     certificate = directory / "fullchain.pem"
     key = directory / "privkey.pem"
     certificate_write = certificate.resolve(strict=False)

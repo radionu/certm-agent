@@ -109,10 +109,13 @@ subject, issuer, and fingerprint with a dedicated
 remove the affected assignment without treating it as an IIS repair.
 
 Version 1.0.0-rc.19 stops nginx deployments from overwriting certificate and
-private-key files owned by Certbot or another local tool. Every CertM-assigned
-nginx certificate is installed under the CertM-owned, versioned path
-`/etc/certm/live/certificate-<id>/<deployment-revision>/`; nginx configuration
-is then updated, tested, reloaded, and verified with full rollback on failure.
+private-key files owned by Certbot or another local tool. Version 1.0.0-rc.20
+makes the CertM-owned versioned paths readable for operators: wildcard
+`*.pmr.vn` uses `/etc/certm/live/pmr.vn/<deployment-revision>/`, while an
+exact certificate uses its full domain. nginx configuration is updated only
+after staging, then tested, reloaded, and verified with full rollback on failure.
+Existing RC19 ID-based directories are left untouched when nginx migrates to the
+new path.
 
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key

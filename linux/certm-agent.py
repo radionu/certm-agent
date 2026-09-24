@@ -1,4 +1,15 @@
-#!/usr/bin/env python3
+#!/bin/sh
+""":"
+for candidate in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 &&
+        "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)'
+    then
+        exec "$candidate" "$0" "$@"
+    fi
+done
+echo "ERROR CertM Agent requires Python 3.8 or newer" >&2
+exit 1
+":"""
 
 import sys
 
@@ -35,7 +46,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.21"
+AGENT_VERSION = "1.0.0-rc.22"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")

@@ -116,7 +116,9 @@ exact certificate uses its full domain. nginx configuration is updated only
 after staging, then tested, reloaded, and verified with full rollback on failure.
 Existing RC19 ID-based directories are left untouched when nginx migrates to the
 new path. Version 1.0.0-rc.21 preserves the installer-selected Python 3.8+
-runtime when Linux agents update themselves.
+runtime when Linux agents update themselves. Version 1.0.0-rc.22 adds a
+backward-compatible launcher so older updaters can complete that first
+transition on AlmaLinux/RHEL 8 systems whose default `python3` is older.
 
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key

@@ -421,6 +421,7 @@ class NginxRenewPlanningTest(unittest.TestCase):
             "version_id": "260901",
             "package_revision": 1,
             "deployment_revision": "260901-r1",
+            "matched_pattern": "*.pmr.vn",
             "fingerprint_sha256": "a" * 64,
         }
 
@@ -542,6 +543,9 @@ class NginxConfigSplitTest(unittest.TestCase):
             "version_id": "260901",
             "package_revision": 1,
             "deployment_revision": f"260901-r1-c{certificate_id}",
+            "matched_pattern": (
+                "*.pmr.vn" if certificate_id == 10 else "b.pmr.vn"
+            ),
             "fingerprint_sha256": fingerprint,
         }
 
@@ -631,12 +635,82 @@ server {{
                     Path(item["paths"]["certificate_path"]).parent.parent.name
                     for item in targets
                 },
-                {"certificate-10", "certificate-11"},
+                {"pmr.vn", "b.pmr.vn"},
             )
             self.assertEqual(
                 {Path(item["paths"]["certificate_path"]).parent.name for item in targets},
                 {"260901-r1-c10", "260901-r1-c11"},
             )
+
+    def test_managed_paths_use_wildcard_base_domain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            old = self.configure(temporary)
+            try:
+                paths = agent.managed_certificate_paths(
+                    self.desired(10, "a" * 64)
+                )
+            finally:
+                agent.CONFIG = old
+
+            directory = Path(paths["certificate_path"]).parent.parent
+            self.assertEqual(directory.name, "pmr.vn")
+
+    def test_managed_paths_use_full_exact_domain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            old = self.configure(temporary)
+            desired = self.desired(11, "b" * 64)
+            desired["matched_pattern"] = "loginhopluc1.pmr.vn"
+            try:
+                paths = agent.managed_certificate_paths(desired)
+            finally:
+                agent.CONFIG = old
+
+            directory = Path(paths["certificate_path"]).parent.parent
+            self.assertEqual(directory.name, "loginhopluc1.pmr.vn")
+
+    def test_managed_path_rejects_unsafe_certificate_domain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            old = self.configure(temporary)
+            desired = self.desired(10, "a" * 64)
+            desired["matched_pattern"] = "../../certbot"
+            try:
+                with self.assertRaisesRegex(RuntimeError, "domain is not safe"):
+                    agent.managed_certificate_paths(desired)
+            finally:
+                agent.CONFIG = old
+
+    def test_rc19_id_path_is_not_treated_as_current_domain_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            old = self.configure(temporary)
+            desired = self.desired(10, "a" * 64)
+            try:
+                paths = agent.managed_certificate_paths(desired)
+                target = {
+                    "desired": desired,
+                    "paths": paths,
+                    "bindings": [
+                        {
+                            "domain": "a.pmr.vn",
+                            "certificate_write_path": str(
+                                Path(temporary)
+                                / "managed"
+                                / "certificate-10"
+                                / desired["deployment_revision"]
+                                / "fullchain.pem"
+                            ),
+                            "key_write_path": str(
+                                Path(temporary)
+                                / "managed"
+                                / "certificate-10"
+                                / desired["deployment_revision"]
+                                / "privkey.pem"
+                            ),
+                        }
+                    ],
+                }
+                self.assertFalse(agent.managed_target_is_current(target))
+            finally:
+                agent.CONFIG = old
 
     def test_managed_path_rejects_unsafe_deployment_revision(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -678,8 +752,8 @@ server {{
             self.assertIn("server_name a.pmr.vn;", rendered)
             self.assertIn("server_name b.pmr.vn;", rendered)
             self.assertNotEqual(rendered, original)
-            self.assertIn("certificate-10/260901-r1-c10/fullchain.pem", rendered)
-            self.assertIn("certificate-11/260901-r1-c11/fullchain.pem", rendered)
+            self.assertIn("pmr.vn/260901-r1-c10/fullchain.pem", rendered)
+            self.assertIn("b.pmr.vn/260901-r1-c11/fullchain.pem", rendered)
             self.assertNotIn("ssl/shared/fullchain.pem", rendered)
 
     def test_render_replaces_stale_certbot_ownership_comments(self):
@@ -749,7 +823,7 @@ server {{
                     )
 
                 def fingerprint(path):
-                    return "a" * 64 if "certificate-10" in str(path) else "b" * 64
+                    return "a" * 64 if "/pmr.vn/" in str(path) else "b" * 64
 
                 with mock.patch.object(
                     agent,
@@ -828,7 +902,7 @@ server {{
                 (
                     Path(temporary)
                     / "managed"
-                    / "certificate-10"
+                    / "pmr.vn"
                     / "260901-r1-c10"
                     / "fullchain.pem"
                 ).exists()
@@ -837,7 +911,7 @@ server {{
                 (
                     Path(temporary)
                     / "managed"
-                    / "certificate-11"
+                    / "b.pmr.vn"
                     / "260901-r1-c11"
                     / "fullchain.pem"
                 ).exists()
@@ -873,7 +947,7 @@ server {{
                 Path(target["key_write_path"]).write_bytes(downloaded["key"])
 
             def fingerprint(path):
-                return "a" * 64 if "certificate-10" in str(path) else "b" * 64
+                return "a" * 64 if "/pmr.vn/" in str(path) else "b" * 64
 
             try:
                 with mock.patch.object(agent, "api_request", return_value={}), \
@@ -895,8 +969,8 @@ server {{
 
             self.assertTrue(changed)
             rendered = config_path.read_text()
-            self.assertIn("certificate-10/260901-r1-c10/fullchain.pem", rendered)
-            self.assertIn("certificate-11/260901-r1-c11/fullchain.pem", rendered)
+            self.assertIn("pmr.vn/260901-r1-c10/fullchain.pem", rendered)
+            self.assertIn("b.pmr.vn/260901-r1-c11/fullchain.pem", rendered)
             self.assertNotIn("managed by Certbot", rendered)
             self.assertIn("letsencrypt/live", str(original_certificate))
             self.assertEqual(original_certificate.read_text(), "old certificate")
@@ -905,7 +979,7 @@ server {{
                 (
                     Path(temporary)
                     / "managed"
-                    / "certificate-10"
+                    / "pmr.vn"
                     / "260901-r1-c10"
                     / "privkey.pem"
                 ).exists()
@@ -914,7 +988,7 @@ server {{
                 (
                     Path(temporary)
                     / "managed"
-                    / "certificate-11"
+                    / "b.pmr.vn"
                     / "260901-r1-c11"
                     / "privkey.pem"
                 ).exists()

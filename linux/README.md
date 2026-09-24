@@ -1,4 +1,4 @@
-# CertM Linux Agent 1.0.0-rc.19
+# CertM Linux Agent 1.0.0-rc.20
 
 One pull-based API v2 agent and installer for:
 
@@ -133,7 +133,7 @@ new worker generation was actually created instead of trusting a successful exit
 
 - Configuration: `/etc/certm/agent.json` (mode `0600`)
 - Runtime: `/opt/certm-agent`
-- Managed certificates: `/etc/certm/live/certificate-<id>/<deployment-revision>/`
+- Managed certificates: `/etc/certm/live/<domain>/<deployment-revision>/`
 - State: `/var/lib/certm/bindings`
 - Backups: `/opt/certm-agent/bkup`
 - Log: `/var/log/certm/certm-agent.log`

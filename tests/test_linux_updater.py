@@ -18,6 +18,62 @@ SPEC.loader.exec_module(UPDATER)
 
 
 class LinuxUpdaterSafetyTest(unittest.TestCase):
+    def test_copy_atomic_pins_executable_scripts_to_running_python(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "package" / "certm-agent.py"
+            target = root / "installed" / "certm-agent.py"
+            source.parent.mkdir()
+            source.write_text("#!/usr/bin/env python3\nprint('agent')\n")
+
+            with mock.patch.object(
+                UPDATER.sys,
+                "executable",
+                "/opt/certm-python/bin/python3.9",
+            ):
+                UPDATER.copy_atomic(source, target)
+
+            self.assertEqual(
+                target.read_text(),
+                "#!/opt/certm-python/bin/python3.9\nprint('agent')\n",
+            )
+            self.assertEqual(target.stat().st_mode & 0o777, 0o750)
+
+    def test_copy_atomic_leaves_library_content_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "package" / "apache.py"
+            target = root / "installed" / "apache.py"
+            source.parent.mkdir()
+            source.write_text("VALUE = 1\n")
+
+            UPDATER.copy_atomic(source, target)
+
+            self.assertEqual(target.read_text(), "VALUE = 1\n")
+            self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+
+    def test_self_test_reports_interpreter_failure_details(self):
+        result = mock.MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="ERROR CertM Agent requires Python 3.8 or newer",
+        )
+
+        with mock.patch.object(
+            UPDATER.subprocess,
+            "run",
+            return_value=result,
+        ), mock.patch.object(
+            UPDATER,
+            "installed_version",
+            return_value="1.0.0-rc.21",
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "exit_code=1.*requires Python 3.8 or newer",
+            ):
+                UPDATER.self_test("1.0.0-rc.21")
+
     def test_ip_approval_error_is_operator_friendly(self):
         error = UPDATER.ApiError(403, {
             "status": "ip_pending_approval",

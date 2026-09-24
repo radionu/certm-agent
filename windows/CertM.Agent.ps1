@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.20'
+$script:AgentVersion = '1.0.0-rc.21'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)

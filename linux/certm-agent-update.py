@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 
 
-UPDATER_VERSION = "1.0.0-rc.20"
+UPDATER_VERSION = "1.0.0-rc.21"
 CONFIG_PATH = Path("/etc/certm/agent.json")
 PUBLIC_KEY_PATH = Path("/etc/certm/update-public.pem")
 LOCK_PATH = Path("/run/certm-agent.lock")
@@ -210,9 +210,18 @@ def copy_atomic(source, target):
     fd, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent))
     os.close(fd)
     temporary = Path(temporary_name)
+    executable_names = {"certm-agent.py", "certm-agent-update.py"}
     try:
-        shutil.copyfile(source, temporary)
-        executable_names = {"certm-agent.py", "certm-agent-update.py"}
+        content = source.read_bytes()
+        if target.name in executable_names:
+            lines = content.splitlines(keepends=True)
+            if not lines or not lines[0].startswith(b"#!"):
+                raise RuntimeError(f"Executable Python script has no shebang: {source}")
+            content = (
+                f"#!{sys.executable}\n".encode()
+                + b"".join(lines[1:])
+            )
+        temporary.write_bytes(content)
         os.chmod(temporary, 0o750 if target.name in executable_names else 0o644)
         os.replace(temporary, target)
     finally:
@@ -255,8 +264,21 @@ def self_test(version):
         text=True,
         timeout=30,
     )
-    if result.returncode != 0 or installed_version() != version:
-        raise RuntimeError("Updated Linux agent failed its executable/version self-test")
+    installed = installed_version()
+    if result.returncode != 0 or installed != version:
+        details = [
+            f"exit_code={result.returncode}",
+            f"expected_version={version}",
+            f"installed_version={installed}",
+        ]
+        if result.stdout.strip():
+            details.append(f"stdout={result.stdout.strip()}")
+        if result.stderr.strip():
+            details.append(f"stderr={result.stderr.strip()}")
+        raise RuntimeError(
+            "Updated Linux agent failed its executable/version self-test: "
+            + "; ".join(details)
+        )
 
 
 def retire_legacy_schedule():

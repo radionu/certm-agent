@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.24"
+AGENT_VERSION = "1.0.0-rc.25"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -2263,6 +2263,45 @@ def zimbra_stage(package):
     return stage
 
 
+def zimbra_complete_trust_chain(cert, chain):
+    """Append only an OS-trusted, self-issued root that verifies this package.
+
+    ACME fullchains normally omit the trust anchor. Zimbra verifies using the
+    supplied CA file and may not consult the operating system's CA bundle.
+    Never download or trust a root just because its subject matches an issuer.
+    """
+    blocks = re.findall(rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----',
+                        chain.read_bytes(), re.S)
+    if not blocks:
+        raise RuntimeError('Zimbra CA chain is empty')
+    with tempfile.TemporaryDirectory(prefix='certm-root-check-') as temporary:
+        candidate = Path(temporary) / 'candidate.pem'
+        candidate.write_bytes(blocks[-1] + b'\n')
+        issuer = run(['openssl', 'x509', '-in', str(candidate), '-noout',
+                      '-issuer', '-nameopt', 'RFC2253']).stdout.strip().split('=', 1)[-1]
+        for der in ssl.create_default_context().get_ca_certs(binary_form=True):
+            pem = ssl.DER_cert_to_PEM_cert(der).encode('ascii')
+            candidate.write_bytes(pem)
+            subject = run(['openssl', 'x509', '-in', str(candidate), '-noout',
+                           '-subject', '-nameopt', 'RFC2253']).stdout.strip().split('=', 1)[-1]
+            if subject != issuer:
+                continue
+            root_issuer = run(['openssl', 'x509', '-in', str(candidate), '-noout',
+                               '-issuer', '-nameopt', 'RFC2253']).stdout.strip().split('=', 1)[-1]
+            if subject != root_issuer:
+                continue
+            verified = run(['openssl', 'verify', '-purpose', 'sslserver',
+                            '-no-CApath', '-CAfile', str(candidate),
+                            '-untrusted', str(chain), str(cert)], check=False)
+            if verified.returncode != 0:
+                continue
+            atomic_write(chain, chain.read_bytes().rstrip() + b'\n' + pem)
+            log('Completed Zimbra CA chain with OS-trusted root: ' + subject)
+            return
+    raise RuntimeError('No OS-trusted root completes the Zimbra CA chain; '
+                       'check CertM fullchain and the OS CA trust store')
+
+
 def zimbra_validate_stage(stage, domain):
     cert, key, chain = (stage / x for x in
                         ('commercial.crt', 'commercial.key', 'commercial_ca.crt'))
@@ -2283,7 +2322,14 @@ def zimbra_validate_stage(stage, domain):
                 raise RuntimeError('New certificate would remove existing wildcard coverage: ' + name)
         else:
             validate_hostname(cert, name)
-    zimbra_run('/opt/zimbra/bin/zmcertmgr', 'verifycrt', 'comm', key, cert, chain)
+    checked = zimbra_run('/opt/zimbra/bin/zmcertmgr', 'verifycrt', 'comm', key, cert, chain,
+                         check=False)
+    if checked.returncode != 0:
+        detail = checked.stdout + checked.stderr
+        if 'unable to get issuer certificate' not in detail.lower() and 'unable to get local issuer certificate' not in detail.lower():
+            raise RuntimeError('Zimbra certificate validation failed: ' + detail)
+        zimbra_complete_trust_chain(cert, chain)
+        zimbra_run('/opt/zimbra/bin/zmcertmgr', 'verifycrt', 'comm', key, cert, chain)
 
 
 def zimbra_backup():

@@ -101,5 +101,58 @@ class ZimbraSafetyTest(unittest.TestCase):
             self.assertEqual(events[3][1], 'savecrt')
 
 
+class ZimbraRootChainTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        def openssl(*args):
+            subprocess.run(['openssl', *args], cwd=self.root, check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.openssl = openssl
+        for name in ('root', 'impostor', 'intermediate', 'leaf'):
+            openssl('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', name + '.key')
+        for name in ('root', 'impostor'):
+            openssl('req', '-new', '-x509', '-key', name + '.key', '-out', name + '.pem',
+                    '-days', '2', '-subj', '/CN=Test Root', '-addext', 'basicConstraints=critical,CA:TRUE')
+        (self.root / 'ca.ext').write_text('basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n')
+        (self.root / 'leaf.ext').write_text('basicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:mail1.pmr.vn\n')
+        for name, issuer, extension in [('intermediate', 'root', 'ca.ext'), ('leaf', 'intermediate', 'leaf.ext')]:
+            openssl('req', '-new', '-key', name + '.key', '-out', name + '.csr', '-subj', '/CN=' + name)
+            openssl('x509', '-req', '-in', name + '.csr', '-CA', issuer + '.pem',
+                    '-CAkey', issuer + '.key', '-CAcreateserial', '-days', '1',
+                    '-extfile', extension, '-out', name + '.pem')
+        self.chain = self.root / 'chain.pem'
+        self.chain.write_bytes((self.root / 'intermediate.pem').read_bytes())
+        self.chain.chmod(0o600)
+
+    def context(self, name):
+        import ssl
+        context = mock.Mock()
+        context.get_ca_certs.return_value = [ssl.PEM_cert_to_DER_cert((self.root / (name + '.pem')).read_text())]
+        return mock.patch.object(agent.ssl, 'create_default_context', return_value=context)
+
+    def test_os_trusted_root_completes_chain_and_preserves_permissions(self):
+        with self.context('root'):
+            agent.zimbra_complete_trust_chain(self.root / 'leaf.pem', self.chain)
+        self.openssl('verify', '-no-CApath', '-CAfile', str(self.chain), 'leaf.pem')
+        self.assertEqual(self.chain.read_bytes().count(b'BEGIN CERTIFICATE'), 2)
+        self.assertEqual(self.chain.stat().st_mode & 0o777, 0o600)
+
+    def test_matching_subject_with_wrong_key_is_rejected(self):
+        original = self.chain.read_bytes()
+        with self.context('impostor'):
+            with self.assertRaisesRegex(RuntimeError, 'No OS-trusted root'):
+                agent.zimbra_complete_trust_chain(self.root / 'leaf.pem', self.chain)
+        self.assertEqual(self.chain.read_bytes(), original)
+
+    def test_empty_os_trust_never_trusts_downloaded_ca(self):
+        context = mock.Mock()
+        context.get_ca_certs.return_value = []
+        with mock.patch.object(agent.ssl, 'create_default_context', return_value=context):
+            with self.assertRaisesRegex(RuntimeError, 'No OS-trusted root'):
+                agent.zimbra_complete_trust_chain(self.root / 'leaf.pem', self.chain)
+
+
 if __name__ == '__main__':
     unittest.main()

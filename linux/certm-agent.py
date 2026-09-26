@@ -34,6 +34,8 @@ import shutil
 import socket
 import ssl
 import stat
+import shlex
+import pwd
 import subprocess
 import tempfile
 import time
@@ -46,7 +48,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.22"
+AGENT_VERSION = "1.0.0-rc.24"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -103,7 +105,7 @@ def warn(message):
 
 def service_type():
     value = str(CONFIG.get("service", {}).get("type", "nginx")).strip().lower()
-    if value not in ("nginx", "apache"):
+    if value not in ("nginx", "apache", "zimbra"):
         raise RuntimeError(f"Unsupported service.type: {value or 'empty'}")
     return value
 
@@ -2180,6 +2182,244 @@ def renew(dry_run=False):
     log(f"Renew completed successfully; changed_groups={changed}; dry_run={dry_run}")
 
 
+# Zimbra uses its certificate manager, never edits its generated nginx config.
+ZIMBRA_HOME = Path('/opt/zimbra')
+ZIMBRA_COMM = ZIMBRA_HOME / 'ssl/zimbra/commercial'
+
+
+def zimbra_run(*args, check=True, timeout=120):
+    return run(['su', '-', 'zimbra', '-c', shlex.join(str(x) for x in args)],
+               check=check, timeout=timeout)
+
+
+def zimbra_window(now=None):
+    # Vietnam has a fixed UTC+07 offset; works on Python 3.8 without zoneinfo.
+    now = now or datetime.now(LOG_TIMEZONE)
+    return 0 <= now.astimezone(LOG_TIMEZONE).hour < 4
+
+
+def zimbra_binding():
+    if os.geteuid() != 0:
+        raise RuntimeError('CertM Zimbra agent must run as root')
+    if stat.S_IMODE(CONFIG_FILE.stat().st_mode) & 0o077:
+        raise RuntimeError('Agent config must have mode 0600')
+    for name in ('zmhostname', 'zmcertmgr', 'zmcontrol'):
+        if not (ZIMBRA_HOME / 'bin' / name).is_file():
+            raise RuntimeError('Missing Zimbra tool: ' + name)
+    domain = zimbra_run('/opt/zimbra/bin/zmhostname').stdout.strip().lower()
+    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', domain) or '.' not in domain:
+        raise RuntimeError('Invalid Zimbra hostname')
+    cert = str(ZIMBRA_COMM / 'commercial.crt')
+    key = str(ZIMBRA_COMM / 'commercial.key')
+    if not Path(cert).is_file() or not Path(key).is_file():
+        raise RuntimeError('Existing commercial certificate/key are required for this Zimbra adapter')
+    return {'domain': domain, 'port': 443, 'listen_host': '127.0.0.1',
+            'site_name': 'Zimbra server certificate', 'binding_id': 'zimbra:' + domain,
+            'certificate_path': cert, 'certificate_write_path': cert,
+            'key_path': key, 'key_write_path': key}
+
+
+def zimbra_verify(binding, expected):
+    # Check all deployed service files, not just the public HTTPS proxy.
+    for relative in ('conf/slapd.crt', 'conf/nginx.crt', 'conf/smtpd.crt',
+                     'conf/imapd.crt', 'mailboxd/etc/mailboxd.pem'):
+        path = ZIMBRA_HOME / relative
+        if path.exists() and fingerprint_file(path) != expected:
+            raise RuntimeError('Zimbra deployed certificate mismatch: ' + str(path))
+    served = verify_served(binding, expected)
+    result = run(['openssl', 's_client', '-connect', '127.0.0.1:389',
+                  '-starttls', 'ldap', '-servername', binding['domain'], '-showcerts'],
+                 input_data='', timeout=30)
+    pem = re.search(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----',
+                    result.stdout, re.S)
+    if not pem:
+        raise RuntimeError('LDAP STARTTLS did not return a certificate')
+    der = ssl.PEM_cert_to_DER_cert(pem.group(0))
+    if hashlib.sha256(der).hexdigest() != expected:
+        raise RuntimeError('LDAP STARTTLS is not serving the expected certificate')
+    status = zimbra_run('/opt/zimbra/bin/zmcontrol', 'status', timeout=120)
+    if re.search(r'\bStopped\b|certificate verify failed|Cannot determine services',
+                 status.stdout + status.stderr, re.I):
+        raise RuntimeError('Zimbra service health check failed after deployment')
+    return served
+
+
+def zimbra_stage(package):
+    user = pwd.getpwnam('zimbra')
+    parent = ZIMBRA_HOME / 'certm-staging'
+    if parent.is_symlink():
+        raise RuntimeError('Zimbra staging parent must not be a symlink')
+    parent.mkdir(mode=0o700, exist_ok=True)
+    os.chown(parent, user.pw_uid, user.pw_gid)
+    parent.chmod(0o700)
+    stage = Path(tempfile.mkdtemp(prefix='cert-', dir=str(parent)))
+    os.chown(stage, user.pw_uid, user.pw_gid)
+    for name, data in (('commercial.crt', package['certificate']),
+                       ('commercial.key', package['key']),
+                       ('commercial_ca.crt', package['chain'])):
+        path = stage / name
+        atomic_write(path, data, 0o600)
+        os.chown(path, user.pw_uid, user.pw_gid)
+    return stage
+
+
+def zimbra_validate_stage(stage, domain):
+    cert, key, chain = (stage / x for x in
+                        ('commercial.crt', 'commercial.key', 'commercial_ca.crt'))
+    if not chain.read_bytes().strip():
+        raise RuntimeError('CertM package has no CA chain; upload the complete chain in CertM')
+    validate_cert_key(cert, key)
+    validate_hostname(cert, domain)
+    run(['openssl', 'x509', '-in', str(cert), '-checkend', '86400', '-noout'])
+    # Preserve existing DNS coverage; changing a wildcard to one hostname could
+    # silently break users accessing other mail aliases.
+    old_san = run(['openssl', 'x509', '-in', str(ZIMBRA_COMM / 'commercial.crt'),
+                   '-noout', '-ext', 'subjectAltName']).stdout
+    new_san = run(['openssl', 'x509', '-in', str(cert), '-noout', '-ext', 'subjectAltName']).stdout
+    new_names = set(re.findall(r'DNS:([^,\s]+)', new_san))
+    for name in re.findall(r'DNS:([^,\s]+)', old_san):
+        if name.startswith('*.'):
+            if name not in new_names:
+                raise RuntimeError('New certificate would remove existing wildcard coverage: ' + name)
+        else:
+            validate_hostname(cert, name)
+    zimbra_run('/opt/zimbra/bin/zmcertmgr', 'verifycrt', 'comm', key, cert, chain)
+
+
+def zimbra_backup():
+    root = Path(CONFIG.get('paths', {}).get('backup_root', '/opt/certm-agent/bkup'))
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    destination = Path(tempfile.mkdtemp(prefix='zimbra-', dir=str(root)))
+    relative_paths = ['ssl', 'conf/ca', 'mailboxd/etc/keystore', 'mailboxd/etc/mailboxd.pem']
+    for name in ('slapd', 'nginx', 'smtpd', 'imapd'):
+        relative_paths.extend(['conf/' + name + '.crt', 'conf/' + name + '.key'])
+    for relative in relative_paths:
+        source = ZIMBRA_HOME / relative
+        if source.exists():
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            run(['cp', '-a', str(source), str(target)], timeout=120)
+    log('Zimbra certificate backup: ' + str(destination))
+    return destination
+
+
+def zimbra_deploy(stage, binding, expected):
+    backup = zimbra_backup()
+    old_valid = run(['openssl', 'x509', '-in', str(ZIMBRA_COMM / 'commercial.crt'),
+                     '-checkend', '0', '-noout'], check=False).returncode == 0
+    old_fingerprint = fingerprint_file(ZIMBRA_COMM / 'commercial.crt')
+    try:
+        user = pwd.getpwnam('zimbra')
+        key = ZIMBRA_COMM / 'commercial.key'
+        atomic_write(key, (stage / 'commercial.key').read_bytes(), 0o600)
+        os.chown(key, user.pw_uid, user.pw_gid)
+        key.chmod(0o600)
+        # LDAP may reject TLS with the expired old certificate. Deploy locally
+        # first, restore healthy TLS, then save the certificate settings to LDAP.
+        zimbra_run('/opt/zimbra/bin/zmcertmgr', 'deploycrt', 'comm',
+                   stage / 'commercial.crt', stage / 'commercial_ca.crt', '-localonly', timeout=300)
+        zimbra_run('/opt/zimbra/bin/zmcontrol', 'restart', timeout=900)
+        served = zimbra_verify(binding, expected)
+        zimbra_run('/opt/zimbra/bin/zmcertmgr', 'savecrt', 'comm', timeout=120)
+        return served
+    except Exception as exc:
+        if not old_valid:
+            # Never automatically replace the new cert with an expired cert.
+            raise RuntimeError('Zimbra deployment/health check failed; backup=' + str(backup) +
+                               '. Old certificate is expired; automatic rollback skipped. ' + str(exc)) from exc
+        try:
+            # Re-deploy via the supported tool so every generated store is restored.
+            previous = backup / 'ssl/zimbra/commercial'
+            for name in ('commercial.crt', 'commercial.key', 'commercial_ca.crt'):
+                atomic_write(stage / name, (previous / name).read_bytes())
+            atomic_write(ZIMBRA_COMM / 'commercial.key', (stage / 'commercial.key').read_bytes())
+            zimbra_run('/opt/zimbra/bin/zmcertmgr', 'deploycrt', 'comm',
+                       stage / 'commercial.crt', stage / 'commercial_ca.crt',
+                       '-localonly', timeout=300)
+            zimbra_run('/opt/zimbra/bin/zmcontrol', 'restart', timeout=900)
+            zimbra_verify(binding, old_fingerprint)
+            zimbra_run('/opt/zimbra/bin/zmcertmgr', 'savecrt', 'comm')
+            rollback = 'Previous valid certificate restored and verified'
+        except Exception as rollback_exc:
+            rollback = 'Rollback failed: ' + str(rollback_exc)
+        raise RuntimeError(str(exc) + '. ' + rollback + '; backup=' + str(backup)) from exc
+
+
+def zimbra_main(args):
+    binding = zimbra_binding()
+    if args.command == 'discover':
+        print(json.dumps(binding, indent=2))
+        return
+    if args.command == 'preflight':
+        token, machine = load_identity()
+        identity = api_request('GET', '/client/preflight', token, machine)
+        status = identity.get('status')
+        if status == 'enrollment_available' and args.enroll:
+            response = api_request('POST', '/client/enroll', token, machine,
+                                   enrollment_payload(read_os_release()))
+            if response.get('status') != 'pending_approval':
+                raise RuntimeError('Unexpected enrollment response')
+            save_client_token(response.get('client_token'))
+            log('Zimbra enrolled; approve client ID=' + str(response.get('client_id')) +
+                ' and assign the certificate covering ' + binding['domain'])
+        elif status in ('active', 'pending_approval', 'enrollment_available'):
+            log('Zimbra preflight: ' + str(status))
+        else:
+            raise RuntimeError('CertM rejected Zimbra client identity')
+        return
+    token, machine = read_active_identity()
+    push_inventory([binding], token, machine)
+    if args.command == 'inventory':
+        return
+    desired = desired_for(binding, token, machine)
+    if not desired:
+        raise RuntimeError('No certificate assigned for ' + binding['domain'] + '; assign it in CertM')
+    expected = normalize_fingerprint(desired.get('fingerprint_sha256'))
+    if fingerprint_file(binding['certificate_path']) == expected:
+        try:
+            zimbra_verify(binding, expected)
+            log('Zimbra certificate is current and verified')
+            return
+        except Exception as exc:
+            warn('Zimbra needs certificate/service repair: ' + str(exc))
+    if args.dry_run:
+        log('DRY RUN: would download, validate, deploy and restart Zimbra; window=00:00-04:00 UTC+07')
+        return
+    if not args.emergency and not zimbra_window():
+        # Do not create repeated unfinished deployment records every cycle.
+        log('WAITING_MAINTENANCE_WINDOW: deployment deferred until 00:00-04:00 UTC+07')
+        return
+    response = api_request('GET', '/cert/download', token, machine,
+                           query={'domain': binding['domain'], 'service': 'zimbra', 'port': 443})
+    deployment_id = response.get('deployment_id')
+    stage = None
+    try:
+        package = decode_package(response, desired, [binding['domain']])
+        stage = zimbra_stage(package)
+        zimbra_validate_stage(stage, binding['domain'])
+        # Do not start a restart transaction after the maintenance window closes.
+        if not args.emergency and not zimbra_window():
+            raise RuntimeError('Maintenance window closed before deployment; no changes made')
+        if args.emergency:
+            log('EMERGENCY: operator requested immediate Zimbra deployment and restart')
+        served = zimbra_deploy(stage, binding, expected)
+    except Exception as exc:
+        if deployment_id:
+            try:
+                report_deployment(token, machine, deployment_id, 'FAILED', message=str(exc)[:1900])
+            except Exception:
+                warn('Unable to send failure report to CertM')
+        raise
+    finally:
+        if stage is not None:
+            shutil.rmtree(stage)
+    # Reporting/network failures must never roll back a healthy deployed cert.
+    report_deployment(token, machine, deployment_id, 'SUCCESS', installed=expected,
+                      served=served, message='Zimbra deployed; HTTPS, LDAP STARTTLS and services verified')
+    push_inventory([binding], token, machine)
+    log('ZIMBRA CERTIFICATE UPDATE SUCCESSFUL')
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="CertM API v2 Linux web-server agent")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_FILE))
@@ -2190,6 +2430,7 @@ def parse_args():
     subcommands.add_parser("inventory")
     renew_parser = subcommands.add_parser("renew")
     renew_parser.add_argument("--dry-run", action="store_true")
+    renew_parser.add_argument("--emergency", action="store_true", help="Zimbra only: deploy outside maintenance hours")
     return parser.parse_args()
 
 
@@ -2206,6 +2447,9 @@ def main():
             warn("Another CertM agent process is already running; this run was skipped")
             return
         log(f"Starting certm-agent command={args.command} version={AGENT_VERSION}")
+        if service_type() == "zimbra":
+            zimbra_main(args)
+            return
         if args.command == "preflight":
             preflight(bool(args.enroll))
         elif args.command == "discover":
@@ -2219,6 +2463,8 @@ def main():
         elif args.command == "inventory":
             inventory()
         else:
+            if args.emergency:
+                raise RuntimeError("--emergency is only supported for Zimbra")
             renew(bool(args.dry_run))
 
 

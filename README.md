@@ -4,7 +4,7 @@ Public pull-based deployment agents for CertM.
 
 CertM has two agent implementations:
 
-- `linux/` — unified API v2 agent for nginx and Apache on Ubuntu, Debian,
+- `linux/` — unified API v2 agent for nginx, Apache and single-server Zimbra 9 on Ubuntu, Debian,
   RHEL, AlmaLinux, and Rocky Linux;
 - `windows/` — native API v2 agent for Windows Server + IIS.
 
@@ -22,7 +22,7 @@ never copied to managed servers.
 
 This repository intentionally contains no enrollment keys, client tokens, private keys, production configuration, or CertM server-side source.
 
-## Linux: nginx and Apache
+## Linux: nginx, Apache and Zimbra
 
 The repository is public. HTTPS clone requires no GitHub account, SSH key,
 personal access token, or stored Git credentials.
@@ -45,6 +45,8 @@ sudo git clone https://github.com/radionu/certm-agent.git /opt/certm-agent-src
 cd /opt/certm-agent-src/linux
 sudo ./install.sh
 ```
+
+For Zimbra, use `bash linux/install.sh --web-server zimbra`; see the Zimbra section in `linux/README.md` for emergency deployment and the maintenance window.
 
 The installer auto-detects nginx or Apache. If both are active, choose one:
 

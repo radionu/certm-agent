@@ -2318,6 +2318,7 @@ def zimbra_deploy(stage, binding, expected):
         # first, restore healthy TLS, then save the certificate settings to LDAP.
         zimbra_run('/opt/zimbra/bin/zmcertmgr', 'deploycrt', 'comm',
                    stage / 'commercial.crt', stage / 'commercial_ca.crt', '-localonly', timeout=300)
+        log('Restarting Zimbra to activate the new certificate; this may take several minutes')
         zimbra_run('/opt/zimbra/bin/zmcontrol', 'restart', timeout=900)
         served = zimbra_verify(binding, expected)
         zimbra_run('/opt/zimbra/bin/zmcertmgr', 'savecrt', 'comm', timeout=120)

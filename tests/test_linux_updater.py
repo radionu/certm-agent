@@ -105,13 +105,13 @@ class LinuxUpdaterSafetyTest(unittest.TestCase):
         ), mock.patch.object(
             UPDATER,
             "installed_version",
-            return_value="1.0.0-rc.22",
+            return_value="1.0.0-rc.23",
         ):
             with self.assertRaisesRegex(
                 RuntimeError,
                 "exit_code=1.*requires Python 3.8 or newer",
             ):
-                UPDATER.self_test("1.0.0-rc.22")
+                UPDATER.self_test("1.0.0-rc.23")
 
     def test_ip_approval_error_is_operator_friendly(self):
         error = UPDATER.ApiError(403, {

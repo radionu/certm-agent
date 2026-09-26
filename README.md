@@ -119,6 +119,9 @@ new path. Version 1.0.0-rc.21 preserves the installer-selected Python 3.8+
 runtime when Linux agents update themselves. Version 1.0.0-rc.22 adds a
 backward-compatible launcher so older updaters can complete that first
 transition on AlmaLinux/RHEL 8 systems whose default `python3` is older.
+Version 1.0.0-rc.23 gives Windows operators an actionable error when IIS has
+no manageable HTTPS binding with a host name instead of surfacing an opaque
+empty-inventory API validation response.
 
 The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
 selected web server, systemd, machine ID, configuration syntax, certificate/key

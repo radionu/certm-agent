@@ -209,3 +209,14 @@ Zimbra deployments are reported to CertM only after verification. Deferred runs
 currently log `WAITING_MAINTENANCE_WINDOW` locally; there is no new dashboard
 status in this release. HTTPS fingerprint verification pins the downloaded leaf;
 CA-chain validation happens before installation using Zimbra's own tool.
+
+### RC25: complete the Zimbra CA chain from OS trust
+
+ACME fullchains normally omit the self-signed root. If Zimbra verification fails
+with an issuer lookup error, the agent finds a matching self-issued root in the
+operating system's trusted CA store, verifies the entire downloaded chain against
+it, appends that root to the staged CA file, and repeats Zimbra verification.
+Matching an issuer name alone never establishes trust. No AIA/root downloads and
+no TLS verification bypass are used. If the root or an intermediate is missing,
+verification still fails before any installed certificate changes. This handles
+the Let's Encrypt YR -> ISRG Root X1 chain seen on the first Zimbra deployment.

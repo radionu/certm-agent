@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.22'
+$script:AgentVersion = '1.0.0-rc.23'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -670,6 +670,15 @@ try {
 
     $status = Invoke-CertMApi GET '/client/status' $clientToken $machineId $null
     if ($status.status -ne 'active') { throw "Client is not ACTIVE: $($status.status)" }
+
+    if ($bindings.Count -eq 0) {
+        throw (
+            'No manageable IIS HTTPS hostname bindings were found. ' +
+            'Open IIS Manager > Sites > Bindings and add or correct an https binding ' +
+            'with a non-empty Host name. CertM intentionally skips hostless bindings ' +
+            'such as *:443: and cannot assign a certificate until a hostname binding exists.'
+        )
+    }
 
     Send-Inventory $bindings $clientToken $machineId
     if ($Mode -eq 'Inventory') {

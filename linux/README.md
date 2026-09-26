@@ -220,3 +220,30 @@ Matching an issuer name alone never establishes trust. No AIA/root downloads and
 no TLS verification bypass are used. If the root or an intermediate is missing,
 verification still fails before any installed certificate changes. This handles
 the Let's Encrypt YR -> ISRG Root X1 chain seen on the first Zimbra deployment.
+
+### RC26: Zimbra verification corrections
+
+The agent now loads hashed CA-directory entries explicitly because Python's
+`get_ca_certs()` can otherwise return no roots before a TLS connection. It refreshes
+`mailboxd.pem` from the authoritative Java keystore with `viewdeployedcrt mailboxd`,
+and verifies LDAP at the configured `ldap_url` instead of assuming loopback.
+Both LDAP STARTTLS and LDAPS are supported; multiple LDAP URLs are outside this
+single-server adapter's scope. Local mailbox HTTPS 8443 and admin HTTPS 7071 are
+also checked against the assigned certificate fingerprint.
+
+After updating, run the no-deployment verification command:
+
+```bash
+/opt/certm-agent/certm-agent.py verify
+```
+
+This refreshes the certificate view and inventory but never downloads a deployment
+package, changes the active certificate, saves LDAP settings or restarts services.
+Only after it succeeds, enable the existing maintenance-window timer:
+
+```bash
+systemctl enable --now certm-agent.timer
+```
+
+A previous failed deployment record remains historical; verification refreshes
+current inventory without rewriting deployment history.

@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.25"
+AGENT_VERSION = "1.0.0-rc.26"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -2219,7 +2219,53 @@ def zimbra_binding():
             'key_path': key, 'key_write_path': key}
 
 
+def zimbra_ldap_endpoint():
+    value = zimbra_run('/opt/zimbra/bin/zmlocalconfig', 'ldap_url').stdout
+    match = re.search(r'^ldap_url\s*=\s*(.+)$', value, re.M)
+    urls = match.group(1).split() if match else []
+    if len(urls) != 1:
+        raise RuntimeError('Zimbra single-server verification requires exactly one configured ldap_url')
+    parsed = urllib.parse.urlsplit(urls[0])
+    if (parsed.scheme not in ('ldap', 'ldaps') or not parsed.hostname or
+            parsed.username is not None or parsed.password is not None or
+            parsed.path not in ('', '/') or parsed.query or parsed.fragment):
+        raise RuntimeError('Unsupported Zimbra ldap_url')
+    port = parsed.port or (636 if parsed.scheme == 'ldaps' else 389)
+    host = parsed.hostname
+    address = '[' + host + ']' if ':' in host else host
+    command = ['openssl', 's_client', '-connect', address + ':' + str(port),
+               '-servername', host, '-showcerts']
+    if parsed.scheme == 'ldap':
+        command.extend(['-starttls', 'ldap'])
+    return command
+
+
+def zimbra_trusted_roots():
+    context = ssl.create_default_context()
+    # OpenSSL loads hashed CA directories lazily. Enumerating an unused context
+    # can therefore return zero even though openssl verify succeeds.
+    capath = ssl.get_default_verify_paths().capath
+    for directory in (capath or '').split(os.pathsep):
+        if not directory:
+            continue
+        for candidate in sorted(Path(directory).glob('*')):
+            # Only entries OpenSSL itself treats as trusted CA certificates.
+            if not re.fullmatch(r'[0-9a-fA-F]{8}\.[0-9]+', candidate.name):
+                continue
+            if not candidate.is_file():
+                continue
+            try:
+                context.load_verify_locations(cafile=str(candidate))
+            except (OSError, ssl.SSLError):
+                continue
+    return context.get_ca_certs(binary_form=True)
+
+
 def zimbra_verify(binding, expected):
+    # mailboxd.pem is an exported view, not the authoritative Java keystore.
+    zimbra_run('/opt/zimbra/bin/zmcertmgr', 'viewdeployedcrt', 'mailboxd')
+    if not (ZIMBRA_HOME / 'mailboxd/etc/mailboxd.pem').is_file():
+        raise RuntimeError('Zimbra mailbox keystore export is missing')
     # Check all deployed service files, not just the public HTTPS proxy.
     for relative in ('conf/slapd.crt', 'conf/nginx.crt', 'conf/smtpd.crt',
                      'conf/imapd.crt', 'mailboxd/etc/mailboxd.pem'):
@@ -2227,9 +2273,9 @@ def zimbra_verify(binding, expected):
         if path.exists() and fingerprint_file(path) != expected:
             raise RuntimeError('Zimbra deployed certificate mismatch: ' + str(path))
     served = verify_served(binding, expected)
-    result = run(['openssl', 's_client', '-connect', '127.0.0.1:389',
-                  '-starttls', 'ldap', '-servername', binding['domain'], '-showcerts'],
-                 input_data='', timeout=30)
+    for port in (8443, 7071):
+        verify_served(dict(binding, port=port), expected)
+    result = run(zimbra_ldap_endpoint(), input_data='', timeout=30)
     pem = re.search(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----',
                     result.stdout, re.S)
     if not pem:
@@ -2279,7 +2325,7 @@ def zimbra_complete_trust_chain(cert, chain):
         candidate.write_bytes(blocks[-1] + b'\n')
         issuer = run(['openssl', 'x509', '-in', str(candidate), '-noout',
                       '-issuer', '-nameopt', 'RFC2253']).stdout.strip().split('=', 1)[-1]
-        for der in ssl.create_default_context().get_ca_certs(binary_form=True):
+        for der in zimbra_trusted_roots():
             pem = ssl.DER_cert_to_PEM_cert(der).encode('ascii')
             candidate.write_bytes(pem)
             subject = run(['openssl', 'x509', '-in', str(candidate), '-noout',
@@ -2422,6 +2468,11 @@ def zimbra_main(args):
     if not desired:
         raise RuntimeError('No certificate assigned for ' + binding['domain'] + '; assign it in CertM')
     expected = normalize_fingerprint(desired.get('fingerprint_sha256'))
+    if args.command == 'verify':
+        zimbra_verify(binding, expected)
+        push_inventory([binding], token, machine)
+        log('ZIMBRA VERIFICATION SUCCESSFUL: certificate, HTTPS, mailbox, LDAP and services; no restart')
+        return
     if fingerprint_file(binding['certificate_path']) == expected:
         try:
             zimbra_verify(binding, expected)
@@ -2475,6 +2526,7 @@ def parse_args():
     preflight_parser.add_argument("--enroll", action="store_true")
     subcommands.add_parser("discover")
     subcommands.add_parser("inventory")
+    subcommands.add_parser("verify", help="Zimbra health verification only; no deployment or restart")
     renew_parser = subcommands.add_parser("renew")
     renew_parser.add_argument("--dry-run", action="store_true")
     renew_parser.add_argument("--emergency", action="store_true", help="Zimbra only: deploy outside maintenance hours")
@@ -2497,6 +2549,8 @@ def main():
         if service_type() == "zimbra":
             zimbra_main(args)
             return
+        if args.command == "verify":
+            raise RuntimeError("verify is currently supported only for Zimbra")
         if args.command == "preflight":
             preflight(bool(args.enroll))
         elif args.command == "discover":

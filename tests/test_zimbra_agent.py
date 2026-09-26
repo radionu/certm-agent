@@ -9,6 +9,48 @@ from test_linux_agent import agent
 
 
 class ZimbraSafetyTest(unittest.TestCase):
+    def test_verify_only_never_downloads_or_deploys(self):
+        p = self.cycle(command='verify')
+        p['api_request'].assert_not_called()
+        p['zimbra_deploy'].assert_not_called()
+        p['zimbra_verify'].assert_called_once()
+
+    def test_ldap_uses_configured_hostname(self):
+        with mock.patch.object(agent, 'zimbra_run', return_value=subprocess.CompletedProcess([], 0, 'ldap_url = ldap://mail1.pmr.vn:389\n')):
+            command = agent.zimbra_ldap_endpoint()
+        self.assertEqual(command[command.index('-connect') + 1], 'mail1.pmr.vn:389')
+        self.assertIn('-starttls', command)
+
+    def test_ldaps_does_not_use_starttls(self):
+        with mock.patch.object(agent, 'zimbra_run', return_value=subprocess.CompletedProcess([], 0, 'ldap_url = ldaps://mail1.pmr.vn\n')):
+            command = agent.zimbra_ldap_endpoint()
+        self.assertIn('mail1.pmr.vn:636', command)
+        self.assertNotIn('-starttls', command)
+
+    def test_ldap_rejects_ambiguous_or_unsafe_config(self):
+        for value in ('ldap://one ldap://two', 'https://mail1.pmr.vn', 'ldap://user:password@mail1.pmr.vn'):
+            with self.subTest(value=value), mock.patch.object(agent, 'zimbra_run', return_value=subprocess.CompletedProcess([], 0, 'ldap_url = ' + value)):
+                with self.assertRaises(RuntimeError):
+                    agent.zimbra_ldap_endpoint()
+
+    def test_mailbox_export_precedes_fingerprint_check(self):
+        events = []
+        def execute(*args, **kwargs):
+            events.append(args)
+            return subprocess.CompletedProcess([], 0, 'All services Running', '')
+        def fingerprint(path):
+            self.assertEqual(events[0][1:], ('viewdeployedcrt', 'mailboxd'))
+            return 'a' * 64
+        with mock.patch.object(agent, 'zimbra_run', side_effect=execute), \
+             mock.patch.object(Path, 'is_file', return_value=True), \
+             mock.patch.object(Path, 'exists', return_value=True), \
+             mock.patch.object(agent, 'fingerprint_file', side_effect=fingerprint), \
+             mock.patch.object(agent, 'verify_served', return_value='a' * 64), \
+             mock.patch.object(agent, 'zimbra_ldap_endpoint', return_value=['openssl']), \
+             mock.patch.object(agent, 'run', return_value=subprocess.CompletedProcess([], 0, 'no certificate', '')):
+            with self.assertRaisesRegex(RuntimeError, 'did not return a certificate'):
+                agent.zimbra_verify({}, 'a' * 64)
+
     def test_window_uses_vietnam_time_and_excludes_0400(self):
         for hour, expected in [(16, False), (17, True), (20, True), (21, False)]:
             self.assertEqual(agent.zimbra_window(datetime(2026, 9, 26, hour, tzinfo=timezone.utc)), expected)
@@ -17,7 +59,7 @@ class ZimbraSafetyTest(unittest.TestCase):
         with mock.patch.object(agent, 'CONFIG', {'service': {'type': 'zimbra'}}):
             self.assertEqual(agent.service_type(), 'zimbra')
 
-    def cycle(self, *, emergency=False, dry_run=False, window=False, failure=None):
+    def cycle(self, *, emergency=False, dry_run=False, window=False, failure=None, command="renew"):
         binding = {'domain': 'mail1.pmr.vn', 'certificate_path': '/unused'}
         patches = {
             'zimbra_binding': mock.Mock(return_value=binding),
@@ -31,10 +73,11 @@ class ZimbraSafetyTest(unittest.TestCase):
             'zimbra_stage': mock.Mock(return_value=Path('/unused-stage')),
             'zimbra_validate_stage': mock.Mock(side_effect=failure),
             'zimbra_deploy': mock.Mock(return_value='a' * 64),
+            'zimbra_verify': mock.Mock(return_value='a' * 64),
             'report_deployment': mock.Mock(),
         }
         with mock.patch.multiple(agent, **patches), mock.patch.object(agent.shutil, 'rmtree'):
-            args = argparse.Namespace(command='renew', emergency=emergency, dry_run=dry_run)
+            args = argparse.Namespace(command=command, emergency=emergency, dry_run=dry_run)
             if failure:
                 with self.assertRaises(RuntimeError):
                     agent.zimbra_main(args)
@@ -145,6 +188,21 @@ class ZimbraRootChainTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'No OS-trusted root'):
                 agent.zimbra_complete_trust_chain(self.root / 'leaf.pem', self.chain)
         self.assertEqual(self.chain.read_bytes(), original)
+
+    def test_lazy_hashed_directory_trust_is_loaded(self):
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self.assertEqual(context.get_ca_certs(), [])
+        capath = self.root / 'trust'
+        capath.mkdir()
+        (capath / '12345678.0').symlink_to(self.root / 'root.pem')
+        # Unhashed files are not part of OpenSSL capath trust.
+        (capath / 'untrusted.pem').symlink_to(self.root / 'impostor.pem')
+        with mock.patch.object(agent.ssl, 'create_default_context', return_value=context), \
+             mock.patch.object(agent.ssl, 'get_default_verify_paths', return_value=argparse.Namespace(capath=str(capath))):
+            roots = agent.zimbra_trusted_roots()
+        self.assertEqual(len(roots), 1)
+        self.assertEqual(roots[0], ssl.PEM_cert_to_DER_cert((self.root / 'root.pem').read_text()))
 
     def test_empty_os_trust_never_trusts_downloaded_ca(self):
         context = mock.Mock()

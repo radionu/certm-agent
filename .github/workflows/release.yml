@@ -22,7 +22,7 @@ jobs:
           python3 -m py_compile linux/certm-agent.py linux/certm-agent-update.py linux/certm_agent/*.py scripts/build_release.py
           python3 -m json.tool linux/agent.json.example >/dev/null
           python3 -m json.tool windows/config.example.json >/dev/null
-          bash -n linux/install.sh
+          bash -n linux/install.sh linux/install-zimbra.sh
           python3 -m unittest discover -s tests -v
 
       - name: Validate Windows PowerShell

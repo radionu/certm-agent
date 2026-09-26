@@ -6,7 +6,7 @@ REQUESTED_WEB_SERVER=""
 DISPLAY_NAME_ARGUMENT=""
 
 usage() {
-  echo "Usage: sudo ./install.sh [--web-server nginx|apache] [--display-name NAME]"
+  echo "Usage: sudo ./install.sh [--web-server nginx|apache|zimbra] [--display-name NAME]"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -36,6 +36,10 @@ done
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run install.sh as root" >&2
   exit 1
+fi
+
+if [[ "${REQUESTED_WEB_SERVER}" == "zimbra" ]]; then
+  exec bash "${BASE_DIR}/install-zimbra.sh" "${DISPLAY_NAME_ARGUMENT}"
 fi
 
 if [[ -n "${REQUESTED_WEB_SERVER}" && "${REQUESTED_WEB_SERVER}" != "nginx" && "${REQUESTED_WEB_SERVER}" != "apache" ]]; then
@@ -342,7 +346,7 @@ fi
 systemctl daemon-reload
 
 echo
-echo "CertM Agent 1.0.0-rc.22 installed. Running full preflight before enrollment."
+echo "CertM Agent 1.0.0-rc.24 installed. Running full preflight before enrollment."
 /opt/certm-agent/certm-agent.py preflight --enroll
 echo
 echo "Installation and preflight completed."

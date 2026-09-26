@@ -157,3 +157,55 @@ running agent version on every run.
 | Desired package | `GET /api/v2/cert/desired?domain=...` |
 | PEM download | `GET /api/v2/cert/download?domain=...&service=nginx|apache&port=...&format=pem` |
 | Verified report | `POST /api/v2/deployment/report` |
+
+## Zimbra 9 single-server adapter (RC24)
+
+Install on the Zimbra host as root, using the same Linux agent repository:
+
+```bash
+bash linux/install.sh --web-server zimbra --display-name 'Zimbra mail1.pmr.vn'
+```
+
+Enter the CertM operations bootstrap credential at the hidden prompt. Installation
+only enrolls: it does not deploy a certificate, restart Zimbra, or enable the timer.
+Approve the client and source IP in CertM and assign the new certificate covering
+the Zimbra hostname and all existing certificate DNS names. The PEM package must
+include the complete CA chain accepted by `zmcertmgr verifycrt`.
+
+For an outage caused by an expired certificate, explicitly bypass the maintenance
+window for one run (this restarts all Zimbra services):
+
+```bash
+/opt/certm-agent/certm-agent.py renew --emergency
+```
+
+After it prints `ZIMBRA CERTIFICATE UPDATE SUCCESSFUL`, enable automation:
+
+```bash
+systemctl enable --now certm-agent.timer
+```
+
+One six-hour service cycle checks for approved agent updates, inventories the
+Zimbra server certificate, and checks the assigned certificate. A timer drop-in
+anchors runs at 00:05, 06:05, 12:05 and 18:05 Asia/Ho_Chi_Minh, with up to five
+minutes of jitter. Certificate download/deployment is deferred outside
+00:00–04:00 UTC+07. The schedule is kept in a drop-in so package updates preserve
+it. A transaction started within the window is allowed to finish safely.
+
+The adapter uses `zmcertmgr deploycrt comm ... -localonly`, restarts Zimbra,
+checks deployed file fingerprints, local HTTPS and LDAP STARTTLS fingerprints,
+checks `zmcontrol status`, then saves certificate settings back to LDAP. It never
+disables LDAP TLS verification or edits generated nginx configuration. The first
+supported scope is a single server with commercial certs and local proxy + LDAP;
+domain SNI certs and multi-server coordination are not supported.
+
+Protected backups are under `/opt/certm-agent/bkup/zimbra-*`. If the previous cert
+is still valid, failed deployment attempts redeploy it and verify recovery. If it
+is expired, automatic rollback is skipped and the failure/backup path is reported;
+restoring an expired cert would not resolve the outage. A failure report must be
+investigated before enabling the timer. Logs: `/var/log/certm/certm-agent.log`.
+
+Zimbra deployments are reported to CertM only after verification. Deferred runs
+currently log `WAITING_MAINTENANCE_WINDOW` locally; there is no new dashboard
+status in this release. HTTPS fingerprint verification pins the downloaded leaf;
+CA-chain validation happens before installation using Zimbra's own tool.

@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.28'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.29'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -120,14 +120,12 @@ Assert-True ($agent -match 'postDeploymentBindings\s*=\s*@\(Get-IisHttpsBindings
     'IIS must refresh inventory after changing one or more certificate bindings.'
 Assert-True ($agent -match 'Post-deployment inventory failed:[\s\S]+''WARN''') `
     'A post-deployment inventory failure must be logged without invalidating a successful certificate deployment.'
-Assert-True ($agent -match 'function\s+Import-IisAdministrationAssembly[\s\S]+System32\\inetsrv\\Microsoft\.Web\.Administration\.dll[\s\S]+\[Reflection\.Assembly\]::LoadFrom\(\$assemblyPath\)') `
-    'The IIS agent must explicitly load Microsoft.Web.Administration from the Windows IIS directory.'
-Assert-True ($agent -match 'Install the IIS Management Scripts and Tools feature') `
-    'A missing IIS administration assembly must produce an actionable feature-installation error.'
-Assert-True ($agent -match 'function\s+Get-IisHttpsBindings\s*\{\s*Import-Module WebAdministration -ErrorAction Stop\s*Import-IisAdministrationAssembly') `
-    'IIS discovery must load Microsoft.Web.Administration before any binding can be changed.'
-Assert-True ($agent -match 'function\s+Set-IisBindingSslFlags[\s\S]+Microsoft\.Web\.Administration\.ServerManager[\s\S]+\[Enum\]::ToObject\(\$sslFlagsType,\s*\$SslFlags\)[\s\S]+CommitChanges\(\)') `
-    'IIS SSL flag updates must use the native API so extended bitmasks are supported.'
+Assert-True ($agent -notmatch 'Microsoft\.Web\.Administration\.ServerManager') `
+    'The IIS agent must avoid the native ServerManager PowerShell pattern rejected by endpoint protection.'
+Assert-True ($agent -match 'function\s+ConvertTo-XPathLiteral[\s\S]+concat\(') `
+    'IIS configuration filters must safely quote site and binding names.'
+Assert-True ($agent -match 'function\s+Set-IisBindingSslFlags[\s\S]+Set-WebConfigurationProperty[\s\S]+-Name ''sslFlags''[\s\S]+-Value \(\[uint32\]\$SslFlags\)[\s\S]+Get-WebConfigurationProperty[\s\S]+sslFlags verification failed') `
+    'IIS SSL flag updates must write and verify the documented uint property through WebAdministration.'
 Assert-True ($agent -notmatch 'Set-WebBinding[\s\S]+-PropertyName\s+''sslFlags''') `
     'IIS SSL flag updates must not use Set-WebBinding because it rejects values above 3.'
 Assert-True ($agent -match '\$newSslFlags\s*=\s*\(\[int\]\$plan\.binding\.ssl_flags\s+-bor\s+1\)') `

@@ -116,8 +116,10 @@ Assert-True ($agent -match 'postDeploymentBindings\s*=\s*@\(Get-IisHttpsBindings
     'IIS must refresh inventory after changing one or more certificate bindings.'
 Assert-True ($agent -match 'Post-deployment inventory failed:[\s\S]+''WARN''') `
     'A post-deployment inventory failure must be logged without invalidating a successful certificate deployment.'
-Assert-True ($agent -match 'function\s+Set-IisBindingSslFlags[\s\S]+Set-WebBinding[\s\S]+-PropertyName\s+''sslFlags''') `
-    'IIS hostname binding updates must be able to enable SNI through the WebAdministration module.'
+Assert-True ($agent -match 'function\s+Set-IisBindingSslFlags[\s\S]+Microsoft\.Web\.Administration\.ServerManager[\s\S]+\[Enum\]::ToObject\(\$sslFlagsType,\s*\$SslFlags\)[\s\S]+CommitChanges\(\)') `
+    'IIS SSL flag updates must use the native API so extended bitmasks are supported.'
+Assert-True ($agent -notmatch 'Set-WebBinding[\s\S]+-PropertyName\s+''sslFlags''') `
+    'IIS SSL flag updates must not use Set-WebBinding because it rejects values above 3.'
 Assert-True ($agent -match '\$newSslFlags\s*=\s*\(\[int\]\$plan\.binding\.ssl_flags\s+-bor\s+1\)') `
     'IIS deployment must add the SNI flag without discarding other SSL flags.'
 Assert-True ($agent -match 'ssl_flags\s*=\s*\[int\]\$plan\.binding\.ssl_flags') `

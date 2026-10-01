@@ -54,18 +54,29 @@ require dirname(__DIR__).'/pfsense/CertM.HAProxy.Agent.php';
 
 function test_certificate(string $commonName): array
 {
-    $key = openssl_pkey_new(['private_key_bits' => 2048]);
-    if ($key === false) {
-        throw new RuntimeException('Unable to create test key.');
+    $keyPath = tempnam(sys_get_temp_dir(), 'certm-key-');
+    $certificatePath = tempnam(sys_get_temp_dir(), 'certm-crt-');
+    if ($keyPath === false || $certificatePath === false) {
+        throw new RuntimeException('Unable to create temporary certificate paths.');
     }
-    $csr = openssl_csr_new(['commonName' => $commonName], $key, ['digest_alg' => 'sha256']);
-    $cert = $csr === false ? false : openssl_csr_sign($csr, null, $key, 1, ['digest_alg' => 'sha256']);
-    if ($cert === false) {
-        throw new RuntimeException('Unable to create test certificate.');
+    try {
+        $command = sprintf(
+            'openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj %s -keyout %s -out %s 2>/dev/null',
+            escapeshellarg('/CN='.$commonName),
+            escapeshellarg($keyPath),
+            escapeshellarg($certificatePath)
+        );
+        exec($command, $output, $status);
+        $certificatePem = file_get_contents($certificatePath);
+        $privateKeyPem = file_get_contents($keyPath);
+        if ($status !== 0 || !is_string($certificatePem) || !is_string($privateKeyPem)) {
+            throw new RuntimeException('Unable to create test certificate.');
+        }
+        return [$certificatePem, $privateKeyPem];
+    } finally {
+        @unlink($keyPath);
+        @unlink($certificatePath);
     }
-    openssl_x509_export($cert, $certificatePem);
-    openssl_pkey_export($key, $privateKeyPem);
-    return [$certificatePem, $privateKeyPem];
 }
 
 [$certificatePem, $privateKeyPem] = test_certificate('*.pmr.vn');
@@ -108,9 +119,7 @@ $pending = array_values(array_filter(
     fn (array $binding): bool => $binding['_cert_ref'] === null
 ));
 if (count($pending) !== 1 || $pending[0]['domain'] !== 'be.abp.pmr.vn') {
-    throw new RuntimeException(
-        'Nested domain was not reported as pending: '.json_encode($bindings)
-    );
+    throw new RuntimeException('Nested domain was not reported as pending.');
 }
 if ($pending[0]['fingerprint_sha256'] !== null || $pending[0]['_group_key'] !== 'pending:be.abp.pmr.vn') {
     throw new RuntimeException('Pending binding metadata is unsafe or unstable.');

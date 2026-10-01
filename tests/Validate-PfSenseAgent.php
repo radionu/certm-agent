@@ -92,7 +92,7 @@ $testConfig = [
                     ]],
                     'ha_certificates' => ['item' => [[
                         'ssl_certificate' => 'existing-ref',
-                    ]],
+                    ]]],
                 ]],
             ],
         ],

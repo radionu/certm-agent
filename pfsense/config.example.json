@@ -1,0 +1,5 @@
+{
+  "api_base": "https://certm.pmr.vn/api/v2",
+  "display_name": "pfSense HAProxy",
+  "enrollment_token": "replace-with-operations-bootstrap-credential"
+}

@@ -345,6 +345,55 @@ Remove all CertM agent data as well:
 .\Uninstall-CertMAgent.ps1 -RemoveData
 ```
 
+## pfSense HAProxy agent
+
+The pfSense agent runs with the PHP runtime bundled with pfSense CE or pfSense
+Plus. It discovers active SSL-offloading frontends in the HAProxy package and
+reports their Certificate Manager references to CertM.
+
+The agent never edits generated files under `/var/etc/haproxy`. During renewal
+it validates the downloaded leaf, key, full chain, fingerprint, and every
+discovered hostname, then updates the existing pfSense certificate entry while
+preserving its `refid`. Intermediate certificates are imported into pfSense
+Certificate Manager and linked through `caref`. The agent saves a normal
+pfSense configuration revision with `write_config()`, regenerates and reloads
+HAProxy through `haproxy_check_run(1)`, verifies the installed fingerprint, and
+reports the deployment to CertM. Any reload or verification failure restores
+the previous certificate and CA arrays and reloads HAProxy again.
+
+Install from the pfSense root shell:
+
+```sh
+fetch -qo /tmp/install-certm-pfsense.sh \
+  https://raw.githubusercontent.com/radionu/certm-agent/main/pfsense/install.sh
+sh /tmp/install-certm-pfsense.sh
+```
+
+The installer performs preflight checks, enrolls the firewall, and registers a
+native pfSense cron entry at minute 21 every six hours. It stores the agent and
+mode-0600 client configuration under `/conf/certm`, which is persistent across
+reboots. Approve the new `pfsense-haproxy` client and assign the appropriate
+certificate profiles before deploying anything.
+
+Review the exact planned certificate changes:
+
+```sh
+/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php dry-run
+```
+
+Run one supervised renewal:
+
+```sh
+/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php renew
+tail -50 /var/log/certm-haproxy.log
+```
+
+The first release intentionally does not self-update and does not install an
+ACME client on the firewall. Re-running the installer refreshes the agent code
+without replacing its enrolled identity. For a pfSense HA pair, enroll only the
+configuration-primary node until HA synchronization behavior has been verified
+in that environment.
+
 ### API v2 compatibility
 
 | Purpose | Endpoint |
@@ -355,6 +404,7 @@ Remove all CertM agent data as well:
 | IIS inventory | `POST /api/v2/client/inventory` |
 | Desired package | `GET /api/v2/cert/desired?domain=...` |
 | PFX download | `GET /api/v2/cert/download?domain=...&service=iis&port=...&format=pfx` |
+| pfSense HAProxy PEM download | `GET /api/v2/cert/download?domain=...&service=pfsense-haproxy&port=...` |
 | Verified report | `POST /api/v2/deployment/report` |
 | Agent update check | `GET /api/v2/client/agent-update` |
 | Agent update report | `POST /api/v2/client/agent-update/report` |

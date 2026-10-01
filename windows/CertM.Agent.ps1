@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.27'
+$script:AgentVersion = '1.0.0-rc.28'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -175,8 +175,32 @@ function Invoke-CertMApi {
     }
 }
 
+function Import-IisAdministrationAssembly {
+    if ('Microsoft.Web.Administration.ServerManager' -as [type]) { return }
+
+    $assemblyPath = Join-Path $env:SystemRoot 'System32\inetsrv\Microsoft.Web.Administration.dll'
+    if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf)) {
+        throw (
+            "IIS administration assembly not found: $assemblyPath. " +
+            'Install the IIS Management Scripts and Tools feature.'
+        )
+    }
+
+    try {
+        $assembly = [Reflection.Assembly]::LoadFrom($assemblyPath)
+    }
+    catch {
+        throw "Unable to load IIS administration assembly $assemblyPath. $($_.Exception.Message)"
+    }
+
+    if (-not $assembly.GetType('Microsoft.Web.Administration.ServerManager', $false)) {
+        throw "IIS administration assembly does not expose Microsoft.Web.Administration.ServerManager: $assemblyPath"
+    }
+}
+
 function Get-IisHttpsBindings {
     Import-Module WebAdministration -ErrorAction Stop
+    Import-IisAdministrationAssembly
     $results = @()
 
     foreach ($site in Get-Website) {
@@ -517,13 +541,25 @@ function Install-DeploymentGroup {
         $servedCertificateIssuer = [string]$failureException.Data['served_certificate_issuer']
 
         foreach ($old in $oldBindings) {
+            $rollbackErrors = @()
             try {
                 Set-IisBindingSslFlags $old.binding ([int]$old.ssl_flags)
-                if ($old.thumbprint) {
+            }
+            catch { $rollbackErrors += "sslFlags: $($_.Exception.Message)" }
+
+            if ($old.thumbprint) {
+                try {
                     Set-IisBindingCertificate $old.binding $old.thumbprint $old.store_name
                 }
+                catch { $rollbackErrors += "certificate: $($_.Exception.Message)" }
             }
-            catch { Write-CertMLog "Rollback failed for $($old.binding.binding_id): $($_.Exception.Message)" 'ERROR' }
+
+            if ($rollbackErrors.Count -gt 0) {
+                Write-CertMLog (
+                    "Rollback failed for $($old.binding.binding_id): " +
+                    ($rollbackErrors -join '; ')
+                ) 'ERROR'
+            }
         }
 
         $reportMessage = "Installation failed and rollback attempted: $failure"

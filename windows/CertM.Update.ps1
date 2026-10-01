@@ -3,7 +3,7 @@ param([string]$ConfigPath = 'C:\CertM\config.json')
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:UpdaterVersion = '1.0.0-rc.27'
+$script:UpdaterVersion = '1.0.0-rc.28'
 $script:Root = 'C:\CertM'
 $script:Mutex = $null
 $script:Config = $null
@@ -76,6 +76,15 @@ function Get-InstalledVersion {
     $match = [regex]::Match($content, "AgentVersion\s*=\s*'([^']+)'", 'IgnoreCase')
     if ($match.Success) { return $match.Groups[1].Value }
     return $script:UpdaterVersion
+}
+
+function Get-InstalledUpdaterVersion {
+    $updaterPath = Join-Path $script:Root 'bin\CertM.Update.ps1'
+    if (-not (Test-Path -LiteralPath $updaterPath)) { return $null }
+    $content = Get-Content -LiteralPath $updaterPath -Raw -Encoding UTF8
+    $match = [regex]::Match($content, "UpdaterVersion\s*=\s*'([^']+)'", 'IgnoreCase')
+    if ($match.Success) { return $match.Groups[1].Value }
+    return $null
 }
 
 function Get-ApiHeaders {
@@ -239,9 +248,21 @@ function Backup-Runtime {
     $existing | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Backup 'existing.json') -Encoding UTF8
 }
 
+function Get-RuntimeInstallOrder {
+    # Keep the agent version marker last. If endpoint protection terminates the
+    # updater mid-install, the old agent version remains visible and the server
+    # will offer the release again on the next scheduled run.
+    return @(
+        'windows\CertM.Update.ps1',
+        'windows\Uninstall-CertMAgent.ps1',
+        'windows\CertM.Agent.ps1'
+    )
+}
+
 function Install-Runtime {
     param([string]$Extracted, [hashtable]$Targets)
-    foreach ($relative in $Targets.Keys) {
+    foreach ($relative in (Get-RuntimeInstallOrder)) {
+        if (-not $Targets.ContainsKey($relative)) { throw "Missing runtime install target: $relative" }
         $target = $Targets[$relative]
         $temporary = "$target.update"
         Copy-Item -LiteralPath (Join-Path $Extracted $relative) -Destination $temporary -Force
@@ -273,6 +294,7 @@ function Test-InstalledScripts {
         if ($errors.Count -gt 0) { throw "PowerShell parser rejected updated script: $path" }
     }
     if ((Get-InstalledVersion) -ne $Version) { throw 'Updated Windows agent version self-test failed.' }
+    if ((Get-InstalledUpdaterVersion) -ne $Version) { throw 'Updated Windows updater version self-test failed.' }
     Import-Module WebAdministration -ErrorAction Stop
     [void](Get-Website)
 }

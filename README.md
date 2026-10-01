@@ -371,10 +371,12 @@ sh /tmp/install-certm-pfsense.sh
 
 The installer performs preflight checks, enrolls the firewall, and registers a
 native pfSense cron entry at minute 21 every six hours. It stores the agent and
-operator command under `/conf/certm`, makes `certm-haproxy` available through
-`/usr/local/sbin`, and stores the client configuration with mode 0600. The cron
-entry invokes the persistent `/conf` command directly, so losing the convenience
-link during an operating-system upgrade does not stop scheduled renewals.
+operator command under `/conf/certm`, installs an executable copy of
+`certm-haproxy` under `/usr/local/sbin`, and stores the client configuration with
+mode 0600. The cron entry invokes the persistent `/conf` command through
+`/bin/sh`, so it also works when `/conf` is mounted with `noexec`; losing the
+convenience copy during an operating-system upgrade does not stop scheduled
+renewals.
 Approve the new `pfsense-haproxy` client and assign the appropriate certificate
 profiles before deploying anything.
 

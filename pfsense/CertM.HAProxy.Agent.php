@@ -777,9 +777,11 @@ function certm_renew(bool $dryRun = false): void
 function certm_install_cron(bool $active): void
 {
     certm_load_pfsense();
-    $legacyCommand = '/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php run';
-    $command = '/conf/certm/certm-haproxy run';
-    install_cron_job($legacyCommand, false, '21', '*/6', '*', '*', '*', 'root', true);
+    $legacyPhpCommand = '/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php run';
+    $legacyWrapperCommand = '/conf/certm/certm-haproxy run';
+    $command = '/bin/sh /conf/certm/certm-haproxy run';
+    install_cron_job($legacyPhpCommand, false, '21', '*/6', '*', '*', '*', 'root', true);
+    install_cron_job($legacyWrapperCommand, false, '21', '*/6', '*', '*', '*', 'root', true);
     install_cron_job($command, $active, '21', '*/6', '*', '*', '*', 'root', true);
     certm_log($active ? 'Installed six-hour pfSense cron job.' : 'Removed pfSense cron job.');
 }
@@ -790,11 +792,15 @@ function certm_status(): void
     $localConfig = certm_load_config();
     $enrolled = trim((string) ($localConfig['client_token'] ?? '')) !== '';
     $cronEnabled = false;
-    $cronCommand = '/conf/certm/certm-haproxy run';
+    $cronCommands = [
+        '/bin/sh /conf/certm/certm-haproxy run',
+        '/conf/certm/certm-haproxy run',
+        '/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php run',
+    ];
 
     foreach (config_get_path('cron/item', []) as $item) {
         $command = trim((string) ($item['command'] ?? ''));
-        if ($command === $cronCommand) {
+        if (in_array($command, $cronCommands, true)) {
             $cronEnabled = true;
             break;
         }

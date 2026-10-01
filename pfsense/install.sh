@@ -35,7 +35,9 @@ trap 'rm -f "${temporary_agent}" "${temporary_command}"' EXIT HUP INT TERM
 chmod 700 "${temporary_agent}" "${temporary_command}"
 mv -f "${temporary_agent}" "${AGENT_PATH}"
 mv -f "${temporary_command}" "${COMMAND_PATH}"
-ln -sf "${COMMAND_PATH}" "${COMMAND_LINK}"
+rm -f "${COMMAND_LINK}"
+cp -f "${COMMAND_PATH}" "${COMMAND_LINK}"
+chmod 700 "${COMMAND_LINK}"
 trap - EXIT HUP INT TERM
 
 if [ ! -f "${CONFIG_PATH}" ]; then
@@ -77,13 +79,13 @@ if [ ! -f "${CONFIG_PATH}" ]; then
     chmod 600 "${CONFIG_PATH}"
 fi
 
-"${COMMAND_PATH}" preflight
+/bin/sh "${COMMAND_PATH}" preflight
 
 if ! grep -q '"client_token"' "${CONFIG_PATH}"; then
-    "${COMMAND_PATH}" enroll
+    /bin/sh "${COMMAND_PATH}" enroll
 fi
 
-"${COMMAND_PATH}" enable
+/bin/sh "${COMMAND_PATH}" enable
 
 echo
 echo 'CertM pfSense HAProxy Agent installed.'

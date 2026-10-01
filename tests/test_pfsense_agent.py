@@ -42,7 +42,7 @@ class PfSenseAgentContractTest(unittest.TestCase):
     def test_agent_reports_pfsense_identity_and_six_hour_schedule(self):
         self.assertIn("pfsense-haproxy", AGENT)
         self.assertIn("'21', '*/6'", AGENT)
-        self.assertIn("/conf/certm/certm-haproxy run", AGENT)
+        self.assertIn("/bin/sh /conf/certm/certm-haproxy run", AGENT)
 
     def test_status_is_safe_and_operational(self):
         for contract in (
@@ -69,10 +69,11 @@ class PfSenseAgentContractTest(unittest.TestCase):
 
     def test_installer_keeps_identity_when_refreshing_agent_code(self):
         self.assertIn('if [ ! -f "${CONFIG_PATH}" ]', INSTALLER)
-        self.assertIn('"${COMMAND_PATH}" enable', INSTALLER)
+        self.assertIn('/bin/sh "${COMMAND_PATH}" enable', INSTALLER)
         self.assertIn("chmod 600", INSTALLER)
-        self.assertIn('ln -sf "${COMMAND_PATH}" "${COMMAND_LINK}"', INSTALLER)
-        self.assertIn('"${COMMAND_PATH}" enable', INSTALLER)
+        self.assertIn('rm -f "${COMMAND_LINK}"', INSTALLER)
+        self.assertIn('cp -f "${COMMAND_PATH}" "${COMMAND_LINK}"', INSTALLER)
+        self.assertNotIn('ln -sf "${COMMAND_PATH}" "${COMMAND_LINK}"', INSTALLER)
 
 
 if __name__ == "__main__":

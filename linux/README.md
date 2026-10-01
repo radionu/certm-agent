@@ -1,249 +1,29 @@
-# CertM Linux Agent 1.0.0-rc.22
+# CertM Linux Agent
 
-One pull-based API v2 agent and installer for:
+The Linux agent supports nginx and Apache on Ubuntu, Debian, RHEL, AlmaLinux and
+Rocky Linux. The same agent also supports a single-server Zimbra 9 installation.
 
-| Distribution family | nginx | Apache |
-|---|---:|---:|
-| Ubuntu / Debian | Supported | Supported (`apache2`) |
-| RHEL / AlmaLinux / Rocky Linux | Supported | Supported (`httpd`) |
+Use the main operator guide for installation and troubleshooting:
 
-The installer detects the distribution, active web server, systemd unit, control
-binary, configuration root, and a Python interpreter version 3.8 or newer. One
-installed agent manages one web server. If nginx and Apache are both active, pass
-`--web-server nginx` or `--web-server apache` explicitly.
+- [English guide](../README.md#linux-agent-nginx-apache-and-zimbra)
+- [Hướng dẫn tiếng Việt](../README_vi.MD)
 
-## Install from the public repository
-
-No GitHub account, token, or SSH key is needed.
-
-Debian or Ubuntu:
+Common commands:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y git
-sudo git clone https://github.com/radionu/certm-agent.git /opt/certm-agent-src
-cd /opt/certm-agent-src/linux
-sudo ./install.sh
-```
-
-RHEL, AlmaLinux, or Rocky Linux:
-
-```bash
-sudo dnf install -y git
-sudo git clone https://github.com/radionu/certm-agent.git /opt/certm-agent-src
-cd /opt/certm-agent-src/linux
-sudo ./install.sh
-```
-
-Specify the web server only when auto-detection would be ambiguous:
-
-```bash
-sudo ./install.sh --web-server apache --display-name 'Apache Production 01'
-```
-
-The installer performs local checks before writing CertM configuration or asking
-for an enrollment key. It then runs the full preflight and enrolls only after the
-environment is valid. It preserves an existing client token, display name, state,
-backups, logs, and timer state during upgrades.
-
-On AlmaLinux/RHEL 8 with only Python 3.6, install Python 3.9 first:
-
-```bash
-sudo dnf install -y python39
-```
-
-The installer selects Python 3.9 directly and does not replace the operating
-system's `python3` command.
-
-## Upgrade
-
-```bash
-sudo git -C /opt/certm-agent-src pull --ff-only origin main
-cd /opt/certm-agent-src/linux
-sudo ./install.sh
-```
-
-RHEL/nginx installations now use this unified installer directly. The obsolete
-`rhel-nginx/` compatibility wrapper is no longer part of the repository.
-
-`certm-agent.timer` runs one six-hour cycle. Its service first checks CertM for
-a version allowed by the server's AUTO/MANUAL policy, then runs certificate
-inventory and renewal with the newly installed agent. Update failure is isolated
-and does not block certificate work. The updater verifies SHA-256, RSA signature,
-and every manifest file, and rolls back the runtime when its self-test fails.
-Configuration, client identity, certificate state, backups, and logs are not
-part of the replaced runtime set. RC13 retires the legacy 15-minute update timer
-automatically after upgrading from RC12.
-
-## Command flow
-
-`discover` is optional and read-only. `preflight`, `inventory`, and `renew` always
-perform discovery themselves.
-
-A renewal submits one inventory before evaluating desired certificates. It
-submits a second, freshly discovered inventory only after a certificate or web
-server configuration was actually changed. No-change and dry-run renewals
-therefore create one inventory event.
-
-```bash
-sudo /opt/certm-agent/certm-agent.py discover
-sudo /opt/certm-agent/certm-agent.py preflight
+sudo /opt/certm-agent/certm-agent.py inventory
 sudo /opt/certm-agent/certm-agent.py renew --dry-run
 sudo /opt/certm-agent/certm-agent.py renew
-sudo systemctl enable --now certm-agent.timer
+sudo systemctl status certm-agent.timer --no-pager
+sudo tail -n 100 /var/log/certm/certm-agent.log
 ```
 
-Before the supervised test, keep the timer stopped to avoid overlapping runs:
+Zimbra verification without deployment or restart:
 
 ```bash
-sudo systemctl stop certm-agent.timer
+sudo /opt/certm-agent/certm-agent.py verify
 ```
 
-## Discovery and deployment safety
-
-nginx discovery uses `nginx -T`. Apache discovery uses the running Apache build's
-`HTTPD_ROOT`, `SERVER_CONFIG_FILE`, and included configuration files. Both adapters:
-
-- accept only concrete DNS names and HTTPS virtual hosts;
-- reject variable certificate paths and ambiguous domain/port mappings;
-- restrict certificate and configuration paths to configured safety roots;
-- group virtual hosts that share certificate files;
-- move every CertM-assigned nginx virtual host to a CertM-owned, versioned path;
-- leave Certbot and other externally managed certificate/key files untouched;
-- split configuration safely when separate virtual hosts need different CertM profiles;
-- refuse different assignments inside one indivisible virtual-host block;
-- validate certificate/key matching, fullchain order, and hostname coverage;
-- back up files, write atomically, test syntax, reload, and verify the served SNI fingerprint;
-- roll back the complete file/config set if validation or served verification fails.
-
-For modern Apache configurations, CertM writes a full chain to
-`SSLCertificateFile`. Existing legacy `SSLCertificateChainFile` configurations are
-also supported; the leaf and chain files are updated separately until a config
-split is required, after which the managed fullchain form is used.
-
-The installer configures a conservative systemd `LimitNOFILE` floor of `4096`
-only when the selected web server currently has a lower limit; it never lowers a
-higher existing value. Preflight attempts to raise the running master process to
-that floor without restarting the web server and records the result in the agent
-log. If the live adjustment cannot be applied, deployment still uses normal reload
-verification and complete rollback on failure. After reload, the agent confirms a
-new worker generation was actually created instead of trusting a successful exit.
-
-## Files and logs
-
-- Configuration: `/etc/certm/agent.json` (mode `0600`)
-- Runtime: `/opt/certm-agent`
-- Managed certificates: `/etc/certm/live/<domain>/<deployment-revision>/`
-- State: `/var/lib/certm/bindings`
-- Backups: `/opt/certm-agent/bkup`
-- Log: `/var/log/certm/certm-agent.log`
-
-Log timestamps use fixed `UTC+07:00`. Protocol, certificate-validity, and state
-timestamps remain UTC.
-
-Exactly one credential is stored: the enrollment credential before enrollment,
-or the client credential afterward. Successful enrollment removes the enrollment
-credential. Inventory reports hostname, `display_name`, web-server type, and the
-running agent version on every run.
-
-## API v2
-
-| Purpose | Endpoint |
-|---|---|
-| Preflight | `GET /api/v2/client/preflight` |
-| Enrollment | `POST /api/v2/client/enroll` |
-| Client state | `GET /api/v2/client/status` |
-| Inventory | `POST /api/v2/client/inventory` |
-| Desired package | `GET /api/v2/cert/desired?domain=...` |
-| PEM download | `GET /api/v2/cert/download?domain=...&service=nginx|apache&port=...&format=pem` |
-| Verified report | `POST /api/v2/deployment/report` |
-
-## Zimbra 9 single-server adapter (RC24)
-
-Install on the Zimbra host as root, using the same Linux agent repository:
-
-```bash
-bash linux/install.sh --web-server zimbra --display-name 'Zimbra mail1.pmr.vn'
-```
-
-Enter the CertM operations bootstrap credential at the hidden prompt. Installation
-only enrolls: it does not deploy a certificate, restart Zimbra, or enable the timer.
-Approve the client and source IP in CertM and assign the new certificate covering
-the Zimbra hostname and all existing certificate DNS names. The PEM package must
-include the complete CA chain accepted by `zmcertmgr verifycrt`.
-
-For an outage caused by an expired certificate, explicitly bypass the maintenance
-window for one run (this restarts all Zimbra services):
-
-```bash
-/opt/certm-agent/certm-agent.py renew --emergency
-```
-
-After it prints `ZIMBRA CERTIFICATE UPDATE SUCCESSFUL`, enable automation:
-
-```bash
-systemctl enable --now certm-agent.timer
-```
-
-One six-hour service cycle checks for approved agent updates, inventories the
-Zimbra server certificate, and checks the assigned certificate. A timer drop-in
-anchors runs at 00:05, 06:05, 12:05 and 18:05 Asia/Ho_Chi_Minh, with up to five
-minutes of jitter. Certificate download/deployment is deferred outside
-00:00–04:00 UTC+07. The schedule is kept in a drop-in so package updates preserve
-it. A transaction started within the window is allowed to finish safely.
-
-The adapter uses `zmcertmgr deploycrt comm ... -localonly`, restarts Zimbra,
-checks deployed file fingerprints, local HTTPS and LDAP STARTTLS fingerprints,
-checks `zmcontrol status`, then saves certificate settings back to LDAP. It never
-disables LDAP TLS verification or edits generated nginx configuration. The first
-supported scope is a single server with commercial certs and local proxy + LDAP;
-domain SNI certs and multi-server coordination are not supported.
-
-Protected backups are under `/opt/certm-agent/bkup/zimbra-*`. If the previous cert
-is still valid, failed deployment attempts redeploy it and verify recovery. If it
-is expired, automatic rollback is skipped and the failure/backup path is reported;
-restoring an expired cert would not resolve the outage. A failure report must be
-investigated before enabling the timer. Logs: `/var/log/certm/certm-agent.log`.
-
-Zimbra deployments are reported to CertM only after verification. Deferred runs
-currently log `WAITING_MAINTENANCE_WINDOW` locally; there is no new dashboard
-status in this release. HTTPS fingerprint verification pins the downloaded leaf;
-CA-chain validation happens before installation using Zimbra's own tool.
-
-### RC25: complete the Zimbra CA chain from OS trust
-
-ACME fullchains normally omit the self-signed root. If Zimbra verification fails
-with an issuer lookup error, the agent finds a matching self-issued root in the
-operating system's trusted CA store, verifies the entire downloaded chain against
-it, appends that root to the staged CA file, and repeats Zimbra verification.
-Matching an issuer name alone never establishes trust. No AIA/root downloads and
-no TLS verification bypass are used. If the root or an intermediate is missing,
-verification still fails before any installed certificate changes. This handles
-the Let's Encrypt YR -> ISRG Root X1 chain seen on the first Zimbra deployment.
-
-### RC26: Zimbra verification corrections
-
-The agent now loads hashed CA-directory entries explicitly because Python's
-`get_ca_certs()` can otherwise return no roots before a TLS connection. It refreshes
-`mailboxd.pem` from the authoritative Java keystore with `viewdeployedcrt mailboxd`,
-and verifies LDAP at the configured `ldap_url` instead of assuming loopback.
-Both LDAP STARTTLS and LDAPS are supported; multiple LDAP URLs are outside this
-single-server adapter's scope. Local mailbox HTTPS 8443 and admin HTTPS 7071 are
-also checked against the assigned certificate fingerprint.
-
-After updating, run the no-deployment verification command:
-
-```bash
-/opt/certm-agent/certm-agent.py verify
-```
-
-This refreshes the certificate view and inventory but never downloads a deployment
-package, changes the active certificate, saves LDAP settings or restarts services.
-Only after it succeeds, enable the existing maintenance-window timer:
-
-```bash
-systemctl enable --now certm-agent.timer
-```
-
-A previous failed deployment record remains historical; verification refreshes
-current inventory without rewriting deployment history.
+Version history is maintained in [CHANGELOG.md](../CHANGELOG.md). Design and
+release details are maintained in
+[docs/TECHNICAL_NOTES.md](../docs/TECHNICAL_NOTES.md).

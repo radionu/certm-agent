@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.32';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.33';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -96,6 +96,26 @@ function certm_machine_id(): string
         certm_fail('Unable to read a stable pfSense host UUID.');
     }
     return 'pfsense:'.strtolower($uuid);
+}
+
+function certm_pfsense_version(): string
+{
+    $versionCommand = trim((string) shell_exec(
+        '/usr/local/sbin/pfSense-version -sv 2>/dev/null'
+    ));
+
+    if ($versionCommand !== '') {
+        return $versionCommand;
+    }
+
+    if (is_readable('/etc/version')) {
+        $versionFile = trim((string) file_get_contents('/etc/version'));
+        if ($versionFile !== '') {
+            return $versionFile;
+        }
+    }
+
+    return '';
 }
 
 function certm_headers(string $token): array
@@ -475,6 +495,8 @@ function certm_push_inventory(array $config, string $token, array $bindings): ar
         'hostname' => gethostname() ?: 'pfsense',
         'display_name' => trim((string) ($config['display_name'] ?? '')),
         'agent_version' => CERTM_PFSENSE_AGENT_VERSION,
+        'os_name' => 'pfSense',
+        'os_version' => certm_pfsense_version(),
         'items' => $items,
     ]);
     certm_log('Inventory sent; '.count($items).' HAProxy HTTPS binding(s) discovered.');
@@ -744,7 +766,7 @@ function certm_enroll(): void
         'agent_type' => CERTM_PFSENSE_AGENT_TYPE,
         'agent_version' => CERTM_PFSENSE_AGENT_VERSION,
         'os_name' => 'pfSense',
-        'os_version' => trim((string) shell_exec('/usr/local/sbin/pfSense-version -sv 2>/dev/null')),
+        'os_version' => certm_pfsense_version(),
     ]);
     $clientToken = trim((string) ($response['client_token'] ?? ''));
     if ($clientToken === '') {

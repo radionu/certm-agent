@@ -11,6 +11,8 @@ are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 - Added support for pfSense systems where `/conf` is mounted with `noexec`.
 - Added onboarding for exact HAProxy domains that do not yet have a matching
   certificate entry.
+- Reported the pfSense version during every inventory, with `/etc/version` as a
+  fallback, so existing CertM clients refresh without re-enrollment.
 - Reorganized documentation into operator guides, this changelog and separate
   technical notes.
 

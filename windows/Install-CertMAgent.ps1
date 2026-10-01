@@ -152,7 +152,7 @@ if ($null -ne (Get-ScheduledTask -TaskName $legacyUpdateTaskName -ErrorAction Si
     Unregister-ScheduledTask -TaskName $legacyUpdateTaskName -Confirm:$false -ErrorAction Stop
 }
 
-Write-Host "CertM IIS Agent 1.0.0-rc.30 installed."
+Write-Host "CertM IIS Agent 1.0.0-rc.31 installed."
 Write-Host "Configuration: $configPath"
 if ($shouldEnableTask) {
     Write-Host "Task: $taskName (enabled; every $IntervalMinutes minutes)"

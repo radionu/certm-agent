@@ -361,6 +361,14 @@ HAProxy through `haproxy_check_run(1)`, verifies the installed fingerprint, and
 reports the deployment to CertM. Any reload or verification failure restores
 the previous certificate and CA arrays and reloads HAProxy again.
 
+Exact `host_matches` ACL domains that do not yet have a matching certificate are
+reported as pending bindings. After a matching CertM profile is assigned, the
+agent creates a new Certificate Manager entry and attaches it as an additional
+HAProxy certificate; it never replaces the shared or primary certificate for a
+new domain. Domains assigned to the same published certificate are consolidated
+into one pfSense certificate entry. Rollback also restores the complete HAProxy
+frontend array when onboarding fails.
+
 Install from the pfSense root shell:
 
 ```sh

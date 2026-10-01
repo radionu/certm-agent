@@ -35,6 +35,7 @@ class PfSenseAgentContractTest(unittest.TestCase):
             "certm_verify_haproxy_pem",
             "config_set_path('cert', $oldCerts)",
             "config_set_path('ca', $oldCas)",
+            "config_set_path('installedpackages/haproxy/ha_backends/item', $oldFrontends)",
             "'FAILED'",
         ):
             self.assertIn(contract, AGENT)
@@ -54,6 +55,18 @@ class PfSenseAgentContractTest(unittest.TestCase):
         ):
             self.assertIn(contract, AGENT)
         self.assertNotIn("client_token: ", AGENT)
+
+    def test_unmatched_acl_domains_are_onboarded_without_replacing_primary_certificate(self):
+        for contract in (
+            "'pending:'.$domain",
+            "'fingerprint_sha256' => null",
+            "function certm_create_certificate(",
+            "function certm_attach_certificate(",
+            "'ha_certificates']['item']",
+            "DRY RUN would create and attach",
+            "'create' => true",
+        ):
+            self.assertIn(contract, AGENT)
 
     def test_operator_command_supports_service_like_operations(self):
         for command in (

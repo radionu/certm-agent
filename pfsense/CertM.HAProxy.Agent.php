@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.31';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.32';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -222,7 +222,11 @@ function certm_certificate_domains(string $certificate): array
             $domains[] = strtolower(rtrim(substr($entry, 4), '.'));
         }
     }
-    $cn = strtolower(rtrim((string) ($parsed['subject']['CN'] ?? ''), '.'));
+    $cn = strtolower(rtrim((string) (
+        $parsed['subject']['CN'] ??
+        $parsed['subject']['commonName'] ??
+        ''
+    ), '.'));
     if ($cn !== '') {
         $domains[] = $cn;
     }
@@ -309,7 +313,7 @@ function certm_discover_bindings(): array
 {
     $bindings = [];
     $frontends = config_get_path('installedpackages/haproxy/ha_backends/item', []);
-    foreach ($frontends as $frontend) {
+    foreach ($frontends as $frontendIndex => $frontend) {
         if (($frontend['status'] ?? '') !== 'active') {
             continue;
         }
@@ -326,6 +330,7 @@ function certm_discover_bindings(): array
             continue;
         }
         $aclDomains = certm_acl_domains($frontend);
+        $coveredAclDomains = [];
         foreach (certm_frontend_certificate_refs($frontend) as $refid => $primary) {
             $lookup = lookup_cert($refid);
             $cert = $lookup['item'] ?? null;
@@ -343,6 +348,9 @@ function certm_discover_bindings(): array
                 $aclDomains,
                 fn (string $domain) => certm_domain_matches($domain, $patterns)
             ));
+            foreach ($domains as $domain) {
+                $coveredAclDomains[$domain] = true;
+            }
             if ($domains === []) {
                 $domains = $patterns;
             }
@@ -376,13 +384,57 @@ function certm_discover_bindings(): array
                             $domain
                         ),
                         '_cert_ref' => $refid,
+                        '_group_key' => 'certificate:'.$refid,
                         '_cert_index' => $lookup['idx'],
                         '_primary' => $primary,
+                        '_frontend_index' => (int) $frontendIndex,
+                        '_frontend_name' => $name,
+                        '_primary_frontend_name' => $primaryName,
+                        '_secondary' => $secondary,
                         '_pem_path' => (!$secondary && $primary)
                             ? '/var/etc/haproxy/'.$name.'.pem'
                             : '/var/etc/haproxy/'.$primaryName.'/'.$name.'_'.$refid.'.pem',
                     ];
                 }
+            }
+        }
+
+        foreach ($aclDomains as $domain) {
+            if (isset($coveredAclDomains[$domain])) {
+                continue;
+            }
+            foreach (certm_frontend_ports($frontend) as $port) {
+                $bindings[] = [
+                    'site_name' => $name,
+                    'site_state' => 'Started',
+                    'domain' => $domain,
+                    'port' => $port,
+                    'protocol' => 'https',
+                    'subject' => null,
+                    'issuer' => null,
+                    'serial_number' => null,
+                    'fingerprint_sha256' => null,
+                    'served_fingerprint_sha256' => null,
+                    'not_before' => null,
+                    'not_after' => null,
+                    'cert_path' => 'config.xml:haproxy/'.$name.'/pending/'.$domain,
+                    'key_path' => null,
+                    'binding_id' => sprintf(
+                        'pfsense-haproxy:%s:%d:pending:%s',
+                        $name,
+                        $port,
+                        $domain
+                    ),
+                    '_cert_ref' => null,
+                    '_group_key' => 'pending:'.$domain,
+                    '_cert_index' => null,
+                    '_primary' => false,
+                    '_frontend_index' => (int) $frontendIndex,
+                    '_frontend_name' => $name,
+                    '_primary_frontend_name' => $primaryName,
+                    '_secondary' => $secondary,
+                    '_pem_path' => null,
+                ];
             }
         }
     }
@@ -553,6 +605,60 @@ function certm_install_package(string $refid, array $package): void
     config_set_path('cert/'.$lookup['idx'], $cert);
 }
 
+function certm_create_certificate(array $package, array $domains): string
+{
+    $caref = certm_import_chain($package['chain']);
+    $refid = uniqid();
+    $cert = [
+        'refid' => $refid,
+        'descr' => substr('CertM '.implode(', ', $domains), 0, 255),
+        'crt' => base64_encode($package['leaf']),
+        'prv' => base64_encode($package['key']),
+    ];
+    if ($caref !== null) {
+        $cert['caref'] = $caref;
+    }
+    config_set_path('cert/', $cert);
+    return $refid;
+}
+
+function certm_attach_certificate(array $bindings, string $refid): array
+{
+    $paths = [];
+    $attached = [];
+    foreach ($bindings as $binding) {
+        $frontendIndex = (int) $binding['_frontend_index'];
+        if (!isset($attached[$frontendIndex])) {
+            $path = 'installedpackages/haproxy/ha_backends/item/'.$frontendIndex;
+            $frontend = config_get_path($path);
+            if (!is_array($frontend)) {
+                certm_fail('HAProxy frontend disappeared while attaching a new certificate.');
+            }
+            $items = $frontend['ha_certificates']['item'] ?? [];
+            if (!is_array($items)) {
+                $items = [];
+            }
+            $exists = false;
+            foreach ($items as $item) {
+                if (($item['ssl_certificate'] ?? '') === $refid) {
+                    $exists = true;
+                    break;
+                }
+            }
+            if (!$exists) {
+                $items[] = ['ssl_certificate' => $refid];
+                $frontend['ha_certificates']['item'] = $items;
+                config_set_path($path, $frontend);
+            }
+            $attached[$frontendIndex] = true;
+        }
+        $paths[] = '/var/etc/haproxy/'.
+            $binding['_primary_frontend_name'].'/'.
+            $binding['_frontend_name'].'_'.$refid.'.pem';
+    }
+    return array_values(array_unique($paths));
+}
+
 function certm_verify_installed(string $refid, string $expected): void
 {
     $lookup = lookup_cert($refid);
@@ -668,10 +774,12 @@ function certm_renew(bool $dryRun = false): void
 
     $groups = [];
     foreach ($bindings as $binding) {
-        $groups[$binding['_cert_ref']][] = $binding;
+        $groups[$binding['_group_key']][] = $binding;
     }
     $deployments = [];
-    foreach ($groups as $refid => $group) {
+    $pendingTargets = [];
+    foreach ($groups as $groupKey => $group) {
+        $refid = $group[0]['_cert_ref'];
         $desired = [];
         foreach ($group as $binding) {
             $value = certm_desired($config, $token, $binding);
@@ -680,13 +788,38 @@ function certm_renew(bool $dryRun = false): void
             }
         }
         if ($desired === []) {
-            certm_log("No CertM assignment for pfSense certificate {$refid}; keeping it unchanged.");
+            if ($refid === null) {
+                certm_log(
+                    'No CertM assignment for new HAProxy domain '.
+                    $group[0]['domain'].'; keeping it unmanaged.'
+                );
+            } else {
+                certm_log("No CertM assignment for pfSense certificate {$refid}; keeping it unchanged.");
+            }
             continue;
         }
         if (count($desired) !== 1) {
-            certm_fail("pfSense certificate {$refid} resolves to multiple CertM assignments.");
+            certm_fail(
+                $refid === null
+                    ? 'New HAProxy domain '.$group[0]['domain'].' resolves to multiple CertM assignments.'
+                    : "pfSense certificate {$refid} resolves to multiple CertM assignments."
+            );
         }
         $target = array_values($desired)[0];
+        if ($refid === null) {
+            $targetKey = certm_desired_key($target);
+            if (!isset($pendingTargets[$targetKey])) {
+                $pendingTargets[$targetKey] = [
+                    'target' => $target,
+                    'bindings' => [],
+                ];
+            }
+            $pendingTargets[$targetKey]['bindings'] = array_merge(
+                $pendingTargets[$targetKey]['bindings'],
+                $group
+            );
+            continue;
+        }
         $expected = strtolower((string) $target['fingerprint_sha256']);
         if (hash_equals($expected, (string) $group[0]['fingerprint_sha256'])) {
             certm_log("pfSense certificate {$refid} is already current.");
@@ -707,8 +840,37 @@ function certm_renew(bool $dryRun = false): void
         ]);
         $deployments[] = [
             'refid' => $refid,
+            'create' => false,
+            'bindings' => $group,
             'domains' => $domains,
             'pem_paths' => array_values(array_unique(array_column($group, '_pem_path'))),
+            'package' => certm_decode_package($download, $target, $domains),
+        ];
+    }
+
+    foreach ($pendingTargets as $pending) {
+        $target = $pending['target'];
+        $pendingBindings = $pending['bindings'];
+        $domains = array_values(array_unique(array_column($pendingBindings, 'domain')));
+        $frontends = array_values(array_unique(array_column($pendingBindings, '_frontend_name')));
+        if ($dryRun) {
+            certm_log(
+                'DRY RUN would create and attach '.(string) $target['deployment_revision'].
+                ' for '.implode(', ', $domains).' on HAProxy frontend(s) '.implode(', ', $frontends)
+            );
+            continue;
+        }
+        $download = certm_api($config, 'GET', 'cert/download', $token, [
+            'domain' => $domains[0],
+            'service' => CERTM_PFSENSE_SERVICE,
+            'port' => (int) $pendingBindings[0]['port'],
+        ]);
+        $deployments[] = [
+            'refid' => null,
+            'create' => true,
+            'bindings' => $pendingBindings,
+            'domains' => $domains,
+            'pem_paths' => [],
             'package' => certm_decode_package($download, $target, $domains),
         ];
     }
@@ -720,10 +882,23 @@ function certm_renew(bool $dryRun = false): void
 
     $oldCerts = config_get_path('cert', []);
     $oldCas = config_get_path('ca', []);
+    $oldFrontends = config_get_path('installedpackages/haproxy/ha_backends/item', []);
     try {
-        foreach ($deployments as $deployment) {
-            certm_install_package($deployment['refid'], $deployment['package']);
+        foreach ($deployments as &$deployment) {
+            if ($deployment['create']) {
+                $deployment['refid'] = certm_create_certificate(
+                    $deployment['package'],
+                    $deployment['domains']
+                );
+                $deployment['pem_paths'] = certm_attach_certificate(
+                    $deployment['bindings'],
+                    $deployment['refid']
+                );
+            } else {
+                certm_install_package($deployment['refid'], $deployment['package']);
+            }
         }
+        unset($deployment);
         write_config('CertM updated pfSense HAProxy certificate material');
         $result = haproxy_check_run(1);
         if ((int) $result !== 0) {
@@ -751,6 +926,7 @@ function certm_renew(bool $dryRun = false): void
     } catch (Throwable $exception) {
         config_set_path('cert', $oldCerts);
         config_set_path('ca', $oldCas);
+        config_set_path('installedpackages/haproxy/ha_backends/item', $oldFrontends);
         write_config('CertM rolled back pfSense HAProxy certificate material');
         $rollback = (int) haproxy_check_run(1) === 0
             ? 'Rollback completed successfully.'

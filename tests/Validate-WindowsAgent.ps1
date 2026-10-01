@@ -88,6 +88,10 @@ Assert-True ($updater -match 'VerifyData\(\$bytes, ''SHA256''') `
     'The updater must verify the package RSA-SHA256 signature.'
 Assert-True ($updater -match "'ROLLBACK'") `
     'The updater must report rollback after a failed installation.'
+Assert-True ($updater -match 'function\s+Get-RuntimeInstallOrder[\s\S]+CertM\.Update\.ps1[\s\S]+Uninstall-CertMAgent\.ps1[\s\S]+CertM\.Agent\.ps1') `
+    'The updater must install itself first and the agent version marker last.'
+Assert-True ($updater -match 'Get-InstalledUpdaterVersion\) -ne \$Version') `
+    'The updater self-test must verify that both agent and updater reached the assigned version.'
 Assert-True ($bootstrap -match "'CertM.Update.ps1'") `
     'The bootstrap must require the updater in every release.'
 Assert-True ($installer -match '\[string\]\$DisplayName') `

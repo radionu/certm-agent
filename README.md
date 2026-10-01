@@ -371,28 +371,41 @@ sh /tmp/install-certm-pfsense.sh
 
 The installer performs preflight checks, enrolls the firewall, and registers a
 native pfSense cron entry at minute 21 every six hours. It stores the agent and
-mode-0600 client configuration under `/conf/certm`, which is persistent across
-reboots. Approve the new `pfsense-haproxy` client and assign the appropriate
-certificate profiles before deploying anything.
+operator command under `/conf/certm`, makes `certm-haproxy` available through
+`/usr/local/sbin`, and stores the client configuration with mode 0600. The cron
+entry invokes the persistent `/conf` command directly, so losing the convenience
+link during an operating-system upgrade does not stop scheduled renewals.
+Approve the new `pfsense-haproxy` client and assign the appropriate certificate
+profiles before deploying anything.
+
+Inspect local enrollment, API state, active bindings, cron state, and the last
+log record without displaying credentials or private keys:
+
+```sh
+certm-haproxy status
+```
 
 Review the exact planned certificate changes:
 
 ```sh
-/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php dry-run
+certm-haproxy dry-run
 ```
 
 Run one supervised renewal:
 
 ```sh
-/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php renew
-tail -50 /var/log/certm-haproxy.log
+certm-haproxy renew
+certm-haproxy logs 50
 ```
 
-The first release intentionally does not self-update and does not install an
-ACME client on the firewall. Re-running the installer refreshes the agent code
-without replacing its enrolled identity. For a pfSense HA pair, enroll only the
-configuration-primary node until HA synchronization behavior has been verified
-in that environment.
+The agent is a bounded scheduled job, not a persistent daemon. Operators can
+use `certm-haproxy enable` or `disable` for the native cron entry and
+`certm-haproxy update` for a supervised refresh. Update downloads the installer,
+checks its shell syntax, then lets the installer download and validate both the
+PHP agent and operator command before replacing them. Enrollment identity is
+preserved. The agent does not install an ACME client on the firewall. For a
+pfSense HA pair, enroll only the configuration-primary node until HA
+synchronization behavior has been verified in that environment.
 
 ### API v2 compatibility
 

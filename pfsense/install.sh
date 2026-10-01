@@ -4,8 +4,11 @@ set -eu
 
 AGENT_DIR='/conf/certm'
 AGENT_PATH="${AGENT_DIR}/CertM.HAProxy.Agent.php"
+COMMAND_PATH="${AGENT_DIR}/certm-haproxy"
+COMMAND_LINK='/usr/local/sbin/certm-haproxy'
 CONFIG_PATH="${AGENT_DIR}/config.json"
 SOURCE_URL='https://raw.githubusercontent.com/radionu/certm-agent/main/pfsense/CertM.HAProxy.Agent.php'
+COMMAND_URL='https://raw.githubusercontent.com/radionu/certm-agent/main/pfsense/certm-haproxy'
 PHP_BIN='/usr/local/bin/php'
 FETCH_BIN='/usr/bin/fetch'
 
@@ -22,12 +25,17 @@ fi
 mkdir -p "${AGENT_DIR}"
 chmod 700 "${AGENT_DIR}"
 
-temporary="${AGENT_PATH}.download.$$"
-trap 'rm -f "${temporary}"' EXIT HUP INT TERM
-"${FETCH_BIN}" -qo "${temporary}" "${SOURCE_URL}"
-"${PHP_BIN}" -l "${temporary}" >/dev/null
-chmod 700 "${temporary}"
-mv -f "${temporary}" "${AGENT_PATH}"
+temporary_agent="${AGENT_PATH}.download.$$"
+temporary_command="${COMMAND_PATH}.download.$$"
+trap 'rm -f "${temporary_agent}" "${temporary_command}"' EXIT HUP INT TERM
+"${FETCH_BIN}" -qo "${temporary_agent}" "${SOURCE_URL}"
+"${FETCH_BIN}" -qo "${temporary_command}" "${COMMAND_URL}"
+"${PHP_BIN}" -l "${temporary_agent}" >/dev/null
+/bin/sh -n "${temporary_command}"
+chmod 700 "${temporary_agent}" "${temporary_command}"
+mv -f "${temporary_agent}" "${AGENT_PATH}"
+mv -f "${temporary_command}" "${COMMAND_PATH}"
+ln -sf "${COMMAND_PATH}" "${COMMAND_LINK}"
 trap - EXIT HUP INT TERM
 
 if [ ! -f "${CONFIG_PATH}" ]; then
@@ -69,16 +77,17 @@ if [ ! -f "${CONFIG_PATH}" ]; then
     chmod 600 "${CONFIG_PATH}"
 fi
 
-"${PHP_BIN}" -f "${AGENT_PATH}" preflight
+"${COMMAND_PATH}" preflight
 
 if ! grep -q '"client_token"' "${CONFIG_PATH}"; then
-    "${PHP_BIN}" -f "${AGENT_PATH}" enroll
+    "${COMMAND_PATH}" enroll
 fi
 
-"${PHP_BIN}" -f "${AGENT_PATH}" install-cron
+"${COMMAND_PATH}" enable
 
 echo
 echo 'CertM pfSense HAProxy Agent installed.'
 echo 'Approve the new client in CertM, assign its certificates, then run:'
-echo "${PHP_BIN} -f ${AGENT_PATH} dry-run"
-echo "${PHP_BIN} -f ${AGENT_PATH} renew"
+echo 'certm-haproxy status'
+echo 'certm-haproxy dry-run'
+echo 'certm-haproxy renew'

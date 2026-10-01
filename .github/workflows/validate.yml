@@ -19,7 +19,7 @@ jobs:
           python3 -m json.tool windows/config.example.json >/dev/null
           python3 -m json.tool pfsense/config.example.json >/dev/null
           bash -n linux/install.sh linux/install-zimbra.sh
-          sh -n pfsense/install.sh pfsense/uninstall.sh
+          sh -n pfsense/install.sh pfsense/uninstall.sh pfsense/certm-haproxy
           php -l pfsense/CertM.HAProxy.Agent.php
           python3 scripts/build_release.py 1.0.0-rc.31 --output "$RUNNER_TEMP/releases"
       - name: Run Linux discovery and safety tests

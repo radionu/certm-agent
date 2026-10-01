@@ -777,9 +777,68 @@ function certm_renew(bool $dryRun = false): void
 function certm_install_cron(bool $active): void
 {
     certm_load_pfsense();
-    $command = '/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php run';
+    $legacyCommand = '/usr/local/bin/php -f /conf/certm/CertM.HAProxy.Agent.php run';
+    $command = '/conf/certm/certm-haproxy run';
+    install_cron_job($legacyCommand, false, '21', '*/6', '*', '*', '*', 'root', true);
     install_cron_job($command, $active, '21', '*/6', '*', '*', '*', 'root', true);
     certm_log($active ? 'Installed six-hour pfSense cron job.' : 'Removed pfSense cron job.');
+}
+
+function certm_status(): void
+{
+    certm_load_pfsense();
+    $localConfig = certm_load_config();
+    $enrolled = trim((string) ($localConfig['client_token'] ?? '')) !== '';
+    $cronEnabled = false;
+    $cronCommand = '/conf/certm/certm-haproxy run';
+
+    foreach (config_get_path('cron/item', []) as $item) {
+        $command = trim((string) ($item['command'] ?? ''));
+        if ($command === $cronCommand) {
+            $cronEnabled = true;
+            break;
+        }
+    }
+
+    $bindingStatus = 'unavailable';
+    try {
+        $bindingStatus = (string) count(certm_discover_bindings());
+    } catch (Throwable $exception) {
+        $bindingStatus = 'error: '.$exception->getMessage();
+    }
+
+    $apiStatus = $enrolled ? 'unreachable' : 'not enrolled';
+    if ($enrolled) {
+        try {
+            $response = certm_api(
+                $localConfig,
+                'GET',
+                'client/status',
+                certm_client_token($localConfig)
+            );
+            $apiStatus = (string) ($response['status'] ?? 'unknown');
+        } catch (Throwable $exception) {
+            $apiStatus = 'error: '.$exception->getMessage();
+        }
+    }
+
+    $lastLog = 'none';
+    if (is_file(CERTM_PFSENSE_LOG)) {
+        $lines = file(CERTM_PFSENSE_LOG, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if (is_array($lines) && $lines !== []) {
+            $lastLog = (string) end($lines);
+        }
+    }
+
+    echo 'CertM pfSense HAProxy Agent'.PHP_EOL;
+    echo 'Version: '.CERTM_PFSENSE_AGENT_VERSION.PHP_EOL;
+    echo 'Machine ID: '.certm_machine_id().PHP_EOL;
+    echo 'Display name: '.trim((string) ($localConfig['display_name'] ?? '')).PHP_EOL;
+    echo 'Enrollment: '.($enrolled ? 'configured' : 'missing').PHP_EOL;
+    echo 'CertM API status: '.$apiStatus.PHP_EOL;
+    echo 'Active HTTPS bindings: '.$bindingStatus.PHP_EOL;
+    echo 'Six-hour cron: '.($cronEnabled ? 'enabled (minute 21)' : 'disabled').PHP_EOL;
+    echo 'Last log: '.$lastLog.PHP_EOL;
 }
 
 function certm_with_lock(callable $operation): void
@@ -803,6 +862,7 @@ function certm_main(array $argv): int
         certm_with_lock(function () use ($command): void {
             match ($command) {
                 'preflight' => certm_preflight(true),
+                'status' => certm_status(),
                 'enroll' => certm_enroll(),
                 'inventory' => certm_inventory(),
                 'renew', 'run' => certm_renew(false),
@@ -810,7 +870,7 @@ function certm_main(array $argv): int
                 'install-cron' => certm_install_cron(true),
                 'remove-cron' => certm_install_cron(false),
                 default => certm_fail(
-                    'Usage: CertM.HAProxy.Agent.php preflight|enroll|inventory|dry-run|renew|run|install-cron|remove-cron'
+                    'Usage: CertM.HAProxy.Agent.php status|preflight|enroll|inventory|dry-run|renew|run|install-cron|remove-cron'
                 ),
             };
         });

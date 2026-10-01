@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.28'
+$script:AgentVersion = '1.0.0-rc.29'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -175,32 +175,8 @@ function Invoke-CertMApi {
     }
 }
 
-function Import-IisAdministrationAssembly {
-    if ('Microsoft.Web.Administration.ServerManager' -as [type]) { return }
-
-    $assemblyPath = Join-Path $env:SystemRoot 'System32\inetsrv\Microsoft.Web.Administration.dll'
-    if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf)) {
-        throw (
-            "IIS administration assembly not found: $assemblyPath. " +
-            'Install the IIS Management Scripts and Tools feature.'
-        )
-    }
-
-    try {
-        $assembly = [Reflection.Assembly]::LoadFrom($assemblyPath)
-    }
-    catch {
-        throw "Unable to load IIS administration assembly $assemblyPath. $($_.Exception.Message)"
-    }
-
-    if (-not $assembly.GetType('Microsoft.Web.Administration.ServerManager', $false)) {
-        throw "IIS administration assembly does not expose Microsoft.Web.Administration.ServerManager: $assemblyPath"
-    }
-}
-
 function Get-IisHttpsBindings {
     Import-Module WebAdministration -ErrorAction Stop
-    Import-IisAdministrationAssembly
     $results = @()
 
     foreach ($site in Get-Website) {
@@ -303,28 +279,59 @@ function Set-IisBindingCertificate {
     $webBinding.AddSslCertificate($Thumbprint, $StoreName)
 }
 
+function ConvertTo-XPathLiteral {
+    param([AllowEmptyString()][string]$Value)
+
+    if (-not $Value.Contains("'")) { return "'$Value'" }
+    if (-not $Value.Contains('"')) { return '"' + $Value + '"' }
+
+    $parts = $Value.Split([char]"'")
+    $literals = New-Object Collections.Generic.List[string]
+    for ($index = 0; $index -lt $parts.Count; $index++) {
+        if ($parts[$index].Length -gt 0) {
+            [void]$literals.Add("'$($parts[$index])'")
+        }
+        if ($index -lt ($parts.Count - 1)) {
+            [void]$literals.Add('"' + "'" + '"')
+        }
+    }
+    return 'concat(' + ($literals -join ',') + ')'
+}
+
 function Set-IisBindingSslFlags {
     param([object]$Binding, [int]$SslFlags)
 
+    $webBinding = Get-WebBinding -Name $Binding.site_name -Protocol 'https' |
+        Where-Object { $_.bindingInformation -eq $Binding.binding_information } |
+        Select-Object -First 1
+    if (-not $webBinding) { throw "IIS binding disappeared: $($Binding.binding_id)" }
+
     # Set-WebBinding rejects extended IIS SSL bit flags with a hard-coded 0..3 range.
-    # Use the native IIS API so SNI can be combined with newer flags and rollback can
-    # restore the exact original bitmask.
-    $serverManager = New-Object Microsoft.Web.Administration.ServerManager
-    try {
-        $site = $serverManager.Sites[$Binding.site_name]
-        if (-not $site) { throw "IIS site disappeared: $($Binding.site_name)" }
+    # The generic configuration cmdlet writes the documented uint property directly,
+    # preserving flags such as Disable HTTP/2, QUIC, TLS 1.3, and legacy TLS.
+    $siteLiteral = ConvertTo-XPathLiteral ([string]$Binding.site_name)
+    $bindingLiteral = ConvertTo-XPathLiteral ([string]$Binding.binding_information)
+    $filter = (
+        "system.applicationHost/sites/site[@name=$siteLiteral]/bindings/" +
+        "binding[@protocol='https' and @bindingInformation=$bindingLiteral]"
+    )
+    Set-WebConfigurationProperty `
+        -PSPath 'MACHINE/WEBROOT/APPHOST' `
+        -Filter $filter `
+        -Name 'sslFlags' `
+        -Value ([uint32]$SslFlags) `
+        -ErrorAction Stop
 
-        $webBinding = $site.Bindings | Where-Object {
-            $_.Protocol -eq 'https' -and $_.BindingInformation -eq $Binding.binding_information
-        } | Select-Object -First 1
-        if (-not $webBinding) { throw "IIS binding disappeared: $($Binding.binding_id)" }
-
-        $sslFlagsType = $webBinding.SslFlags.GetType()
-        $webBinding.SslFlags = [Enum]::ToObject($sslFlagsType, $SslFlags)
-        $serverManager.CommitChanges()
-    }
-    finally {
-        if ($serverManager) { $serverManager.Dispose() }
+    $updatedProperty = Get-WebConfigurationProperty `
+        -PSPath 'MACHINE/WEBROOT/APPHOST' `
+        -Filter $filter `
+        -Name 'sslFlags' `
+        -ErrorAction Stop
+    if ([uint32]$updatedProperty.Value -ne [uint32]$SslFlags) {
+        throw (
+            "IIS sslFlags verification failed for $($Binding.binding_id). " +
+            "Expected $SslFlags; received $($updatedProperty.Value)"
+        )
     }
 }
 

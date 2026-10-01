@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.26'
+$script:AgentVersion = '1.0.0-rc.27'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -282,12 +282,26 @@ function Set-IisBindingCertificate {
 function Set-IisBindingSslFlags {
     param([object]$Binding, [int]$SslFlags)
 
-    Set-WebBinding `
-        -Name $Binding.site_name `
-        -BindingInformation $Binding.binding_information `
-        -PropertyName 'sslFlags' `
-        -Value ([string]$SslFlags) `
-        -ErrorAction Stop
+    # Set-WebBinding rejects extended IIS SSL bit flags with a hard-coded 0..3 range.
+    # Use the native IIS API so SNI can be combined with newer flags and rollback can
+    # restore the exact original bitmask.
+    $serverManager = New-Object Microsoft.Web.Administration.ServerManager
+    try {
+        $site = $serverManager.Sites[$Binding.site_name]
+        if (-not $site) { throw "IIS site disappeared: $($Binding.site_name)" }
+
+        $webBinding = $site.Bindings | Where-Object {
+            $_.Protocol -eq 'https' -and $_.BindingInformation -eq $Binding.binding_information
+        } | Select-Object -First 1
+        if (-not $webBinding) { throw "IIS binding disappeared: $($Binding.binding_id)" }
+
+        $sslFlagsType = $webBinding.SslFlags.GetType()
+        $webBinding.SslFlags = [Enum]::ToObject($sslFlagsType, $SslFlags)
+        $serverManager.CommitChanges()
+    }
+    finally {
+        if ($serverManager) { $serverManager.Dispose() }
+    }
 }
 
 function Get-ServedCertificate {

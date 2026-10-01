@@ -222,7 +222,11 @@ function certm_certificate_domains(string $certificate): array
             $domains[] = strtolower(rtrim(substr($entry, 4), '.'));
         }
     }
-    $cn = strtolower(rtrim((string) ($parsed['subject']['CN'] ?? ''), '.'));
+    $cn = strtolower(rtrim((string) (
+        $parsed['subject']['CN'] ??
+        $parsed['subject']['commonName'] ??
+        ''
+    ), '.'));
     if ($cn !== '') {
         $domains[] = $cn;
     }

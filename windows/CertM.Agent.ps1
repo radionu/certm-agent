@@ -7,12 +7,13 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.29'
+$script:AgentVersion = '1.0.0-rc.30'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
 
 [void][Reflection.Assembly]::LoadWithPartialName('System.Security')
+[void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem')
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Write-CertMLog {
@@ -172,6 +173,371 @@ function Invoke-CertMApi {
         }
         if ($AllowNotFound -and $statusCode -eq 404) { return $null }
         throw (Get-CertMApiErrorMessage $_.Exception)
+    }
+}
+
+function Send-AgentUpdateReport {
+    param(
+        [string]$Token,
+        [string]$MachineId,
+        [int]$ReleaseId,
+        [ValidateSet('STARTED', 'SUCCESS', 'FAILED', 'ROLLBACK')][string]$Status,
+        [string]$Message,
+        [string]$InstalledVersion = ''
+    )
+
+    $body = [ordered]@{
+        release_id = $ReleaseId
+        status = $Status
+        message = if ($Message.Length -gt 2000) {
+            $Message.Substring(0, 2000)
+        }
+        else {
+            $Message
+        }
+    }
+    if ($InstalledVersion) { $body['installed_version'] = $InstalledVersion }
+    Invoke-CertMApi POST '/client/agent-update/report' $Token $MachineId $body | Out-Null
+}
+
+function Get-AgentUpdateTextSha256 {
+    param([string]$Text)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)) |
+            ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally { $sha.Dispose() }
+}
+
+function Get-AgentUpdateTrustedKey {
+    param([string]$Token, [string]$MachineId, [string]$ExpectedFingerprint)
+
+    $metadata = Invoke-CertMApi GET '/client/agent-update/key' $Token $MachineId $null
+    if ($metadata.algorithm -ne 'RSA-SHA256') {
+        throw 'Unsupported update signing algorithm.'
+    }
+
+    $fingerprint = Get-AgentUpdateTextSha256 ([string]$metadata.pem)
+    if (
+        $fingerprint -ne [string]$metadata.fingerprint_sha256 -or
+        $fingerprint -ne $ExpectedFingerprint
+    ) {
+        throw 'Agent-update signing-key fingerprint mismatch.'
+    }
+
+    $path = Join-Path $script:CertMRoot 'update-public-key.json'
+    if (Test-Path -LiteralPath $path) {
+        $pinned = Read-JsonFile $path $null
+        if ([string]$pinned.fingerprint_sha256 -ne $fingerprint) {
+            throw 'Server signing key differs from the locally pinned key.'
+        }
+        return $pinned
+    }
+
+    Write-JsonFileAtomic $path $metadata
+    Write-CertMLog "Pinned agent-update public key $fingerprint"
+    return $metadata
+}
+
+function Test-AgentUpdatePackageSignature {
+    param([string]$PackagePath, [string]$Signature, [object]$Key)
+
+    $parameters = New-Object Security.Cryptography.RSAParameters
+    $parameters.Modulus = [Convert]::FromBase64String([string]$Key.modulus)
+    $parameters.Exponent = [Convert]::FromBase64String([string]$Key.exponent)
+    $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
+    try {
+        $rsa.ImportParameters($parameters)
+        $bytes = [IO.File]::ReadAllBytes($PackagePath)
+        $signatureBytes = [Convert]::FromBase64String($Signature)
+        if (-not $rsa.VerifyData($bytes, 'SHA256', $signatureBytes)) {
+            throw 'Agent update RSA signature is invalid.'
+        }
+    }
+    finally { $rsa.Dispose() }
+}
+
+function Expand-AgentUpdateArchive {
+    param([string]$ArchivePath, [string]$Destination)
+
+    $root = [IO.Path]::GetFullPath($Destination).TrimEnd('\') + '\'
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        foreach ($entry in $archive.Entries) {
+            $target = [IO.Path]::GetFullPath((Join-Path $Destination $entry.FullName))
+            if (-not $target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Unsafe archive path: $($entry.FullName)"
+            }
+            if ([string]::IsNullOrEmpty($entry.Name)) {
+                New-Item -ItemType Directory -Path $target -Force | Out-Null
+                continue
+            }
+            New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        }
+    }
+    finally { $archive.Dispose() }
+}
+
+function Test-AgentOnlyUpdateManifest {
+    param([string]$Extracted, [string]$Version)
+
+    $allowed = @{
+        'windows\CertM.Agent.ps1' = $true
+        'windows\CertM.Update.ps1' = $true
+        'windows\Uninstall-CertMAgent.ps1' = $true
+    }
+    $manifestPath = Join-Path $Extracted 'manifest.json'
+    $manifest = Read-JsonFile $manifestPath $null
+    if ([int]$manifest.schema -ne 1 -or [string]$manifest.platform -ne 'windows') {
+        throw 'Invalid Windows update manifest.'
+    }
+    if ([string]$manifest.version -ne $Version) {
+        throw 'Manifest version does not match assigned release.'
+    }
+
+    $declared = @{}
+    foreach ($item in @($manifest.files)) {
+        $relative = ([string]$item.path).Replace('/', '\')
+        if (-not $allowed.ContainsKey($relative) -or $declared.ContainsKey($relative)) {
+            throw "Unexpected manifest file: $relative"
+        }
+        $path = Join-Path $Extracted $relative
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Missing manifest file: $relative"
+        }
+        $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne [string]$item.sha256) {
+            throw "Manifest hash mismatch: $relative"
+        }
+        $declared[$relative] = $true
+    }
+
+    if (-not $declared.ContainsKey('windows\CertM.Agent.ps1')) {
+        throw 'Manifest does not contain the Windows agent runtime.'
+    }
+    $actual = @(Get-ChildItem -LiteralPath $Extracted -File -Recurse |
+        Where-Object { $_.Name -ne 'manifest.json' })
+    if ($actual.Count -ne $declared.Count) {
+        throw 'Archive contains undeclared files.'
+    }
+
+    return (Join-Path $Extracted 'windows\CertM.Agent.ps1')
+}
+
+function Get-AgentScriptVersion {
+    param([string]$Path)
+
+    $content = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $match = [regex]::Match($content, "AgentVersion\s*=\s*'([^']+)'", 'IgnoreCase')
+    if ($match.Success) { return $match.Groups[1].Value }
+    return $null
+}
+
+function Test-AgentScript {
+    param([string]$Path, [string]$ExpectedVersion)
+
+    $tokens = $null
+    $errors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile(
+        $Path,
+        [ref]$tokens,
+        [ref]$errors
+    )
+    if ($errors.Count -gt 0) {
+        throw "PowerShell parser rejected updated agent: $Path"
+    }
+    if ((Get-AgentScriptVersion $Path) -ne $ExpectedVersion) {
+        throw 'Updated Windows agent version self-test failed.'
+    }
+}
+
+function Get-AgentUpdateHeaders {
+    param([string]$Token, [string]$MachineId)
+
+    return @{
+        Authorization = "Bearer $Token"
+        'X-CertM-Agent-Type' = 'iis'
+        'X-CertM-Agent-Version' = $script:AgentVersion
+        'X-CertM-Machine-ID' = $MachineId
+        Accept = 'application/json'
+    }
+}
+
+function Invoke-EmbeddedAgentUpdate {
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return $false }
+
+    $updateMutex = $null
+    $createdNew = $false
+    try {
+        $updateMutex = [Threading.Mutex]::new(
+            $true,
+            'Global\CertM-IIS-Agent',
+            [ref]$createdNew
+        )
+        if (-not $createdNew) {
+            Write-CertMLog 'Another CertM agent process is running; update check skipped.' 'WARN'
+            return $false
+        }
+
+        $script:Config = Read-JsonFile $ConfigPath $null
+        if ($script:Config.PSObject.Properties.Name -notcontains 'client_token_protected') {
+            return $false
+        }
+        $token = Unprotect-LocalMachineSecret ([string]$script:Config.client_token_protected)
+        $machineId = Get-MachineId
+        $response = Invoke-CertMApi GET '/client/agent-update' $token $machineId $null
+        if ($null -eq $response.update) { return $false }
+
+        $update = $response.update
+        if ([string]$update.platform -ne 'windows') {
+            throw 'Server assigned a non-Windows update to this client.'
+        }
+        $releaseId = [int]$update.release_id
+        $version = [string]$update.version
+
+        if ($version -eq $script:AgentVersion) {
+            Send-AgentUpdateReport `
+                $token `
+                $machineId `
+                $releaseId `
+                'SUCCESS' `
+                "Windows agent $version was already installed; recovered an interrupted legacy update" `
+                $version
+            Write-CertMLog "Recovered interrupted Windows agent update to $version."
+            return $false
+        }
+
+        Send-AgentUpdateReport `
+            $token `
+            $machineId `
+            $releaseId `
+            'STARTED' `
+            "Installing Windows agent runtime $version"
+
+        $work = Join-Path (Join-Path $script:CertMRoot 'staging') ("agent-update-$releaseId")
+        if (Test-Path -LiteralPath $work) {
+            Remove-Item -LiteralPath $work -Recurse -Force
+        }
+        $extracted = Join-Path $work 'extracted'
+        $backup = Join-Path $work 'backup\CertM.Agent.ps1'
+        $package = Join-Path $work 'package.zip'
+        New-Item -ItemType Directory -Path $extracted -Force | Out-Null
+
+        $modified = $false
+        $target = Join-Path $script:CertMRoot 'bin\CertM.Agent.ps1'
+        try {
+            $key = Get-AgentUpdateTrustedKey `
+                $token `
+                $machineId `
+                ([string]$update.signing_key_fingerprint)
+            $downloadPath = [string]$update.download_path
+            if (-not $downloadPath.StartsWith(
+                '/client/agent-update/download/',
+                [StringComparison]::Ordinal
+            )) {
+                throw 'Server returned an invalid update download path.'
+            }
+
+            $downloadUri = "$($script:Config.api_base.TrimEnd('/'))$downloadPath"
+            Invoke-WebRequest `
+                -UseBasicParsing `
+                -Uri $downloadUri `
+                -Headers (Get-AgentUpdateHeaders $token $machineId) `
+                -OutFile $package `
+                -TimeoutSec ([int]$script:Config.request_timeout_seconds)
+            $packageHash = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($packageHash -ne [string]$update.sha256) {
+                throw 'Downloaded package SHA-256 mismatch.'
+            }
+
+            Test-AgentUpdatePackageSignature `
+                $package `
+                ([string]$update.signature) `
+                $key
+            Expand-AgentUpdateArchive $package $extracted
+            $source = Test-AgentOnlyUpdateManifest $extracted $version
+            Test-AgentScript $source $version
+
+            New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force | Out-Null
+            Copy-Item -LiteralPath $target -Destination $backup -Force
+            $temporary = "$target.update"
+            Copy-Item -LiteralPath $source -Destination $temporary -Force
+            $modified = $true
+            Move-Item -LiteralPath $temporary -Destination $target -Force
+            Test-AgentScript $target $version
+
+            Send-AgentUpdateReport `
+                $token `
+                $machineId `
+                $releaseId `
+                'SUCCESS' `
+                "Windows agent runtime $version installed without replacing the updater" `
+                $version
+            Write-CertMLog "CertM Windows agent runtime updated successfully to $version."
+            Remove-Item -LiteralPath $work -Recurse -Force
+            return $true
+        }
+        catch {
+            $failure = $_.Exception.Message
+            try {
+                Send-AgentUpdateReport $token $machineId $releaseId 'FAILED' $failure
+            }
+            catch {
+                Write-CertMLog "Unable to report update failure: $($_.Exception.Message)" 'WARN'
+            }
+            if ($modified -and (Test-Path -LiteralPath $backup)) {
+                try {
+                    Copy-Item -LiteralPath $backup -Destination $target -Force
+                    Send-AgentUpdateReport `
+                        $token `
+                        $machineId `
+                        $releaseId `
+                        'ROLLBACK' `
+                        "Rolled back agent-only update after: $failure"
+                }
+                catch {
+                    Write-CertMLog "Agent-only rollback failed: $($_.Exception.Message)" 'ERROR'
+                }
+            }
+            throw
+        }
+    }
+    finally {
+        if ($updateMutex) {
+            if ($createdNew) { $updateMutex.ReleaseMutex() }
+            $updateMutex.Dispose()
+        }
+    }
+}
+
+function Complete-InterruptedAgentUpdate {
+    param([string]$Token, [string]$MachineId)
+
+    try {
+        $response = Invoke-CertMApi GET '/client/agent-update' $Token $MachineId $null
+        if (
+            $null -ne $response.update -and
+            [string]$response.update.platform -eq 'windows' -and
+            [string]$response.update.version -eq $script:AgentVersion
+        ) {
+            Send-AgentUpdateReport `
+                $Token `
+                $MachineId `
+                ([int]$response.update.release_id) `
+                'SUCCESS' `
+                "Windows agent $($script:AgentVersion) recovered after endpoint protection interrupted the legacy updater" `
+                $script:AgentVersion
+            Write-CertMLog (
+                "Recovered interrupted legacy update after verifying Windows agent " +
+                "$($script:AgentVersion)."
+            )
+        }
+    }
+    catch {
+        Write-CertMLog "Interrupted update recovery check failed: $($_.Exception.Message)" 'WARN'
     }
 }
 
@@ -601,16 +967,14 @@ function Install-DeploymentGroup {
 }
 
 if ($Mode -eq 'Run' -and -not $SkipUpdateCheck) {
-    $updaterPath = Join-Path $script:CertMRoot 'bin\CertM.Update.ps1'
-    if (Test-Path -LiteralPath $updaterPath) {
-        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
-            -File $updaterPath -ConfigPath $ConfigPath
-        if ($LASTEXITCODE -ne 0) {
-            Write-CertMLog (
-                "Agent update check failed with exit code $LASTEXITCODE; " +
-                'certificate work will continue.'
-            ) 'WARN'
-        }
+    try {
+        [void](Invoke-EmbeddedAgentUpdate)
+    }
+    catch {
+        Write-CertMLog (
+            "Agent-only update check failed: $($_.Exception.Message); " +
+            'certificate work will continue.'
+        ) 'WARN'
     }
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
         -File $PSCommandPath -ConfigPath $ConfigPath -Mode Run -SkipUpdateCheck
@@ -727,6 +1091,11 @@ try {
 
     $status = Invoke-CertMApi GET '/client/status' $clientToken $machineId $null
     if ($status.status -ne 'active') { throw "Client is not ACTIVE: $($status.status)" }
+
+    # A legacy updater may be terminated by endpoint protection after it has
+    # replaced CertM.Agent.ps1 but before it can report success. The installed
+    # agent completes that exact-version assignment without rewriting files.
+    Complete-InterruptedAgentUpdate $clientToken $machineId
 
     Send-Inventory $bindings $clientToken $machineId
     if ($Mode -eq 'Inventory') {

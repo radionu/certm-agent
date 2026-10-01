@@ -260,6 +260,21 @@ or disabled. That single six-hour task checks for approved agent updates before
 running certificate work. The installer does not run a certificate cycle unless
 `-RunOnce` is supplied explicitly.
 
+Starting with RC30, the Windows agent performs an agent-only update. It verifies
+the package SHA-256, pinned RSA signing key, package signature, manifest, file
+hash, PowerShell syntax, and embedded agent version, but replaces only
+`C:\CertM\bin\CertM.Agent.ps1`. It never launches the legacy updater during a
+normal scheduled run and does not rewrite `CertM.Update.ps1` or the uninstaller.
+This avoids the repeated multi-script and self-replacement behavior classified
+as ransomware by endpoint-protection behavior engines.
+
+RC30 also acts as a transition release for older Windows installations. If an
+endpoint-protection product terminates the legacy updater after the RC30 agent
+file has already been installed, the next RC30 agent run recognizes the exact
+assigned version and reports the interrupted update as recovered without
+rewriting any file. The legacy updater remains installed only for compatibility
+and manual recovery; RC30 and later agents do not invoke it.
+
 Inspect current IIS bindings without contacting CertM or changing certificates:
 
 ```powershell

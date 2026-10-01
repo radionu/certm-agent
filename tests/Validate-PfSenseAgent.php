@@ -80,6 +80,10 @@ function test_certificate(string $commonName): array
 }
 
 [$certificatePem, $privateKeyPem] = test_certificate('*.pmr.vn');
+$certificateDomains = certm_certificate_domains($certificatePem);
+if (!in_array('*.pmr.vn', $certificateDomains, true)) {
+    throw new RuntimeException('Test certificate domains: '.json_encode($certificateDomains));
+}
 $testConfig = [
     'cert' => [[
         'refid' => 'existing-ref',
@@ -119,7 +123,7 @@ $pending = array_values(array_filter(
     fn (array $binding): bool => $binding['_cert_ref'] === null
 ));
 if (count($pending) !== 1 || $pending[0]['domain'] !== 'be.abp.pmr.vn') {
-    throw new RuntimeException('Nested domain was not reported as pending.');
+    throw new RuntimeException('Pending bindings: '.json_encode($bindings));
 }
 if ($pending[0]['fingerprint_sha256'] !== null || $pending[0]['_group_key'] !== 'pending:be.abp.pmr.vn') {
     throw new RuntimeException('Pending binding metadata is unsafe or unstable.');

@@ -45,6 +45,21 @@ class PfSenseAgentContractTest(unittest.TestCase):
         self.assertIn("'21', '*/6'", AGENT)
         self.assertIn("/bin/sh /conf/certm/certm-haproxy run", AGENT)
 
+    def test_inventory_refreshes_pfsense_operating_system_metadata(self):
+        for contract in (
+            "function certm_pfsense_version()",
+            "'/etc/version'",
+            "'os_name' => 'pfSense'",
+            "'os_version' => certm_pfsense_version()",
+        ):
+            self.assertIn(contract, AGENT)
+
+        inventory = AGENT.split(
+            "function certm_push_inventory", 1
+        )[1].split("function certm_desired", 1)[0]
+        self.assertIn("'os_name' => 'pfSense'", inventory)
+        self.assertIn("'os_version' => certm_pfsense_version()", inventory)
+
     def test_status_is_safe_and_operational(self):
         for contract in (
             "function certm_status()",

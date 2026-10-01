@@ -6,6 +6,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 AGENT = (ROOT / "pfsense/CertM.HAProxy.Agent.php").read_text()
 INSTALLER = (ROOT / "pfsense/install.sh").read_text()
+COMMAND = (ROOT / "pfsense/certm-haproxy").read_text()
 
 
 class PfSenseAgentContractTest(unittest.TestCase):
@@ -41,12 +42,37 @@ class PfSenseAgentContractTest(unittest.TestCase):
     def test_agent_reports_pfsense_identity_and_six_hour_schedule(self):
         self.assertIn("pfsense-haproxy", AGENT)
         self.assertIn("'21', '*/6'", AGENT)
-        self.assertIn("/conf/certm/CertM.HAProxy.Agent.php run", AGENT)
+        self.assertIn("/conf/certm/certm-haproxy run", AGENT)
+
+    def test_status_is_safe_and_operational(self):
+        for contract in (
+            "function certm_status()",
+            "CertM API status:",
+            "Active HTTPS bindings:",
+            "Six-hour cron:",
+            "Last log:",
+        ):
+            self.assertIn(contract, AGENT)
+        self.assertNotIn("client_token: ", AGENT)
+
+    def test_operator_command_supports_service_like_operations(self):
+        for command in (
+            "status|preflight|enroll|inventory|dry-run|renew|run",
+            "enable)",
+            "disable)",
+            "logs)",
+            "update)",
+        ):
+            self.assertIn(command, COMMAND)
+        self.assertIn("/bin/sh -n", COMMAND)
+        self.assertIn('/bin/sh "${temporary}"', COMMAND)
 
     def test_installer_keeps_identity_when_refreshing_agent_code(self):
         self.assertIn('if [ ! -f "${CONFIG_PATH}" ]', INSTALLER)
-        self.assertIn("install-cron", INSTALLER)
+        self.assertIn('"${COMMAND_PATH}" enable', INSTALLER)
         self.assertIn("chmod 600", INSTALLER)
+        self.assertIn('ln -sf "${COMMAND_PATH}" "${COMMAND_LINK}"', INSTALLER)
+        self.assertIn('"${COMMAND_PATH}" enable', INSTALLER)
 
 
 if __name__ == "__main__":

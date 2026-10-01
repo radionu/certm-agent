@@ -1,33 +1,42 @@
 # CertM Agent
 
-Public pull-based deployment agents for CertM.
+[Tiếng Việt](README_vi.MD) · [Version history](CHANGELOG.md) · [Technical notes](docs/TECHNICAL_NOTES.md)
 
-CertM has two agent implementations:
+CertM Agent connects a server or firewall to CertM. It finds the HTTPS sites on
+that system, reports their current certificates, and installs certificates that
+an administrator has assigned in CertM.
 
-- `linux/` — unified API v2 agent for nginx, Apache and single-server Zimbra 9 on Ubuntu, Debian,
-  RHEL, AlmaLinux, and Rocky Linux;
-- `windows/` — native API v2 agent for Windows Server + IIS.
+The agent runs from the managed system. It does not require CertM to log in to
+the server, and it does not issue certificates by itself.
 
-The other top-level directories are repository support files, not additional agents:
+## Supported agents
 
-| Path | Purpose | Installed on managed servers |
-|---|---|---:|
-| `tests/` | Automated Linux safety tests and Windows contract validation | No |
-| `.github/workflows/` | Runs the test suite on Linux and Windows | No |
+| System | Service | Agent |
+|---|---|---|
+| Ubuntu / Debian | nginx, Apache, Zimbra 9 single server | Linux agent |
+| RHEL / AlmaLinux / Rocky Linux | nginx, Apache | Linux agent |
+| Windows Server 2016 or later | IIS | Windows agent |
+| pfSense CE / Plus | HAProxy package | pfSense HAProxy agent |
 
-The obsolete `rhel-nginx/` compatibility wrapper has been removed. RHEL,
-AlmaLinux, Rocky Linux, Ubuntu, and Debian all use the unified `linux/` agent.
-The `tests/` directory remains because it prevents unsafe agent releases; it is
-never copied to managed servers.
+Before installing, ask the CertM administrator for the operations bootstrap
+credential. The new client and its source IP may need approval in CertM before
+certificate assignments become available.
 
-This repository intentionally contains no enrollment keys, client tokens, private keys, production configuration, or CertM server-side source.
+## Linux agent: nginx, Apache and Zimbra
 
-## Linux: nginx, Apache and Zimbra
+The same Linux agent is used for nginx, Apache and Zimbra. Run all installation
+commands as `root` or through `sudo`.
 
-The repository is public. HTTPS clone requires no GitHub account, SSH key,
-personal access token, or stored Git credentials.
+Requirements:
 
-On Ubuntu or Debian:
+- Python 3.8 or later;
+- outbound HTTPS access to CertM;
+- an active nginx or Apache service, or a supported Zimbra installation;
+- `systemd`.
+
+### Automatic installation
+
+Ubuntu or Debian:
 
 ```bash
 sudo apt-get update
@@ -37,7 +46,7 @@ cd /opt/certm-agent-src/linux
 sudo ./install.sh
 ```
 
-On RHEL, AlmaLinux, or Rocky Linux:
+RHEL, AlmaLinux or Rocky Linux:
 
 ```bash
 sudo dnf install -y git
@@ -46,170 +55,139 @@ cd /opt/certm-agent-src/linux
 sudo ./install.sh
 ```
 
-For Zimbra, use `bash linux/install.sh --web-server zimbra`; see the Zimbra section in `linux/README.md` for emergency deployment and the maintenance window.
-
-The installer auto-detects nginx or Apache. If both are active, choose one:
-
-```bash
-sudo ./install.sh --web-server apache --display-name 'Apache Production 01'
-```
-
-Keep `/opt/certm-agent-src` as the source checkout; the installed runtime is
-separate in `/opt/certm-agent`.
-
-The first upgrade from an agent without the managed updater must be installed
-from the public checkout. Version 1.0.0-rc.11 introduced this one-time
-bootstrap requirement:
+The installer normally detects nginx or Apache. If both are running, select the
+service explicitly:
 
 ```bash
-sudo git -C /opt/certm-agent-src pull --ff-only origin main
-cd /opt/certm-agent-src/linux
-sudo ./install.sh
+sudo ./install.sh --web-server nginx --display-name 'Web Server 01'
+sudo ./install.sh --web-server apache --display-name 'Web Server 01'
 ```
 
-Version 1.0.0-rc.13 consolidates software updates and certificate work into one
-six-hour cycle. `certm-agent.timer` activates `certm-agent.service`; the oneshot
-service first checks and installs an approved agent release, then starts the
-newly installed agent for certificate inventory and renewal. An update failure
-is logged but does not block certificate work. The updater verifies the package
-SHA-256, RSA signature, and manifest, performs a self-test, and restores the
-previous runtime if installation fails.
+For Zimbra, use the same Linux source:
 
-Only `certm-agent.timer` is enabled. The legacy `certm-agent-update.timer` and
-service are retired automatically after an RC12 client installs RC13.
+```bash
+cd /opt/certm-agent-src
+sudo bash linux/install.sh --web-server zimbra --display-name 'Zimbra Mail 01'
+```
 
-Version 1.0.0-rc.14 adds clear handling for CertM's multiple-source-IP approval
-policy. When a valid client reaches CertM through a new hospital WAN address,
-the server records the address for administrator review and blocks certificate
-and agent-update operations. Linux and Windows logs now identify the observed
-source IP and state that administrator approval is required instead of showing
-only a generic HTTP 403 error.
+Enter the bootstrap credential when asked. Installation enrolls the system but
+does not immediately change a certificate.
 
-Version 1.0.0-rc.15 makes the Windows agent refresh IIS inventory immediately
-after a successful certificate deployment. When one certificate is installed
-on multiple hostname bindings, CertM now changes every affected domain to `OK`
-in the same run instead of leaving all but the deployment's primary domain with
-a stale pre-deployment status until the next six-hour cycle.
+### Manual installation
 
-Version 1.0.0-rc.16 makes initial Windows enrollment failures actionable. The
-first enrollment attempt no longer runs a premature update check, connection
-failures identify the CertM API and the DNS, TCP 443, firewall/proxy, clock, and
-TLS trust checks to perform, and the installer prints the final agent error
-instead of replacing it with a generic installer exit code.
+Use this method when Git is unavailable on the server:
 
-Version 1.0.0-rc.17 enables SNI before assigning a certificate to an IIS
-hostname binding that did not already require SNI. This prevents HTTP.sys from
-continuing to serve the default IP:port certificate on shared `*:443` bindings.
-If installation or live TLS verification fails, the agent restores both the
-previous certificate and the original IIS SSL flags.
+1. Download the repository ZIP on a trusted administrator computer:
+   `https://github.com/radionu/certm-agent/archive/refs/heads/main.zip`
+2. Copy the ZIP to the server and extract it.
+3. Run the same installer from the extracted `linux` directory.
 
-Version 1.0.0-rc.18 identifies certificate substitution performed by Kaspersky
-Endpoint Security during local TLS verification. It still rolls IIS back and
-reports the deployment as failed, but now sends the observed certificate
-subject, issuer, and fingerprint with a dedicated
-`TLS_INTERCEPTION_DETECTED` code so CertM operators can keep, suspend, or
-remove the affected assignment without treating it as an IIS repair.
+Example:
 
-Version 1.0.0-rc.19 stops nginx deployments from overwriting certificate and
-private-key files owned by Certbot or another local tool. Version 1.0.0-rc.20
-makes the CertM-owned versioned paths readable for operators: wildcard
-`*.pmr.vn` uses `/etc/certm/live/pmr.vn/<deployment-revision>/`, while an
-exact certificate uses its full domain. nginx configuration is updated only
-after staging, then tested, reloaded, and verified with full rollback on failure.
-Existing RC19 ID-based directories are left untouched when nginx migrates to the
-new path. Version 1.0.0-rc.21 preserves the installer-selected Python 3.8+
-runtime when Linux agents update themselves. Version 1.0.0-rc.22 adds a
-backward-compatible launcher so older updaters can complete that first
-transition on AlmaLinux/RHEL 8 systems whose default `python3` is older.
+```bash
+cd /tmp/certm-agent-main/linux
+sudo ./install.sh --web-server nginx --display-name 'Web Server 01'
+```
 
-The unified installer requires Python 3.8 or newer. It validates OpenSSL, the
-selected web server, systemd, machine ID, configuration syntax, certificate/key
-pairs, local write paths, reload capacity, and CertM API reachability before
-enrollment. On AlmaLinux/RHEL 8, `python39` is supported without changing the
-operating system's `python3` command.
+For Zimbra:
 
-The agent discovers current HTTPS vhosts on every run. The standalone `discover`
-command is optional and read-only; preflight, inventory, and renewal discover
-automatically. See `linux/README.md` before enabling the systemd timer.
+```bash
+cd /tmp/certm-agent-main
+sudo bash linux/install.sh --web-server zimbra --display-name 'Zimbra Mail 01'
+```
 
-Both agents support an optional `display_name` configuration value for a human-friendly server label. A new Linux installation asks for this value and always writes the field to `/etc/certm/agent.json`; upgrades add an empty field when an older configuration does not have it. The real operating-system hostname is reported independently on every inventory run. Changing a hostname therefore does not require re-enrollment as long as the machine ID and client token remain valid.
+### Validate and enable nginx or Apache
 
-Every authenticated API call includes the running agent type and version. Inventory also
-includes `agent_version`, allowing CertM to refresh an existing client's displayed version
-after an upgrade without re-enrollment.
+After the CertM administrator approves the client and assigns certificates:
 
-Agent log lines use the fixed Vietnam offset `UTC+07:00` and include `+07:00` in every timestamp. Protocol, certificate-validity, and state timestamps remain UTC.
+```bash
+sudo /opt/certm-agent/certm-agent.py inventory
+sudo /opt/certm-agent/certm-agent.py renew --dry-run
+sudo /opt/certm-agent/certm-agent.py renew
+sudo systemctl enable --now certm-agent.timer
+```
 
-## Windows/IIS
+### Validate and enable Zimbra
 
-The Windows agent:
+A Zimbra deployment restarts Zimbra services. Run the first deployment during a
+maintenance period. For an urgent expired-certificate repair, the administrator
+may explicitly allow a run outside the normal window:
 
-- creates a stable identity from the Windows `MachineGuid`;
-- uses the API v2 preflight, enrollment, approval, desired/download, inventory, and deployment-report flow;
-- protects enrollment and client tokens with Windows DPAPI (`LocalMachine` scope);
-- inventories IIS HTTPS/SNI bindings and reports whether each IIS site is started or stopped;
-- downloads a short-lived password-protected PFX package;
-- imports the leaf and chain into `LocalMachine\My` without an exportable private key;
-- updates only selected IIS bindings;
-- verifies the SHA-256 fingerprint actually served by IIS using SNI;
-- rolls bindings back when installation or verification fails;
-- tracks `deployment_revision`, so a rebuilt package is applied even when the leaf fingerprint is unchanged.
+```bash
+sudo /opt/certm-agent/certm-agent.py renew --dry-run
+sudo /opt/certm-agent/certm-agent.py renew --emergency
+sudo /opt/certm-agent/certm-agent.py verify
+sudo systemctl enable --now certm-agent.timer
+```
 
-The current release skips HTTPS bindings without a host name because CertM v2 selects certificates by domain. It also skips IIS Central Certificate Store bindings rather than silently changing them to direct certificate bindings.
+Without `--emergency`, Zimbra certificate changes are made only during the
+configured maintenance window. The `verify` command checks the installed
+certificate and Zimbra services without changing them or restarting Zimbra.
 
-Bindings from stopped or otherwise inactive IIS sites remain visible in inventory, but the
-agent does not download a certificate, change the binding, or attempt live TLS verification
-for them. Each skipped binding is recorded in the agent log. Once the site is started, the
-next scheduled run evaluates and deploys its desired certificate normally.
+### Linux checks and logs
 
-### Requirements
+```bash
+sudo systemctl status certm-agent.timer --no-pager
+sudo systemctl list-timers certm-agent.timer --all
+sudo tail -n 100 /var/log/certm/certm-agent.log
+sudo journalctl -u certm-agent.service -n 100 --no-pager
+```
 
-- Windows Server 2016 or later
-- IIS with the WebAdministration PowerShell module
-- Windows PowerShell 5.1
-- outbound HTTPS access to CertM
-- CertM API v2 PFX download support
-- an elevated PowerShell window for installation
+Run the complete scheduled cycle immediately. This may install an approved
+agent update and deploy assigned certificates:
 
-### Install
+```bash
+sudo systemctl start certm-agent.service
+```
 
-For a new server, open PowerShell as Administrator and run one command:
+Important locations:
+
+- Configuration: `/etc/certm/agent.json`
+- Agent: `/opt/certm-agent`
+- Log: `/var/log/certm/certm-agent.log`
+- Backups: `/opt/certm-agent/bkup`
+- Managed certificates: `/etc/certm/live`
+
+When asking the CertM administrator for help, send the last 100 lines of the
+agent log and the output of `systemctl status certm-agent.timer`.
+
+## Windows IIS agent
+
+Requirements:
+
+- Windows Server 2016 or later;
+- IIS and the WebAdministration PowerShell module;
+- Windows PowerShell 5.1;
+- outbound HTTPS access to CertM;
+- an Administrator PowerShell window.
+
+### Automatic installation
+
+Open PowerShell as Administrator and run:
 
 ```powershell
 $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $p="$env:TEMP\Install-CertM.ps1"; Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/radionu/certm-agent/main/windows/Bootstrap-CertMAgent.ps1' -OutFile $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
 ```
 
-The bootstrap downloads the complete Windows agent, asks the operations engineer for the
-bootstrap credential using a secure prompt, installs the agent, enrolls immediately, and
-enables the Scheduled Task every six hours. The credential is not placed in the command
-history or logs. After successful enrollment, the bootstrap credential field is removed
-from `C:\CertM\config.json`; only the DPAPI-protected, client-specific identity remains.
+The installer asks for the bootstrap credential using a hidden prompt, enrolls
+the server, and creates the `CertM IIS Agent` task for a six-hour schedule.
 
-An optional friendly name can be supplied without exposing the credential:
+To install with automation disabled until manual validation:
 
 ```powershell
-$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $p="$env:TEMP\Install-CertM.ps1"; Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/radionu/certm-agent/main/windows/Bootstrap-CertMAgent.ps1' -OutFile $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -DisplayName 'IIS Download Production'
+$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $p="$env:TEMP\Install-CertM.ps1"; Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/radionu/certm-agent/main/windows/Bootstrap-CertMAgent.ps1' -OutFile $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Staged
 ```
 
-Use `-Staged` when the machine requires the supervised discovery/dry-run workflow. The
-bootstrap then enrolls once but leaves the task disabled.
+### Manual installation
 
-### Manual installation and recovery
+Use this method when the server cannot download from GitHub:
 
-Use this procedure when the one-command bootstrap cannot download from GitHub, or when
-the operations team needs to install from files copied through another approved channel.
-Download the repository ZIP from
-`https://github.com/radionu/certm-agent/archive/refs/heads/main.zip`, extract it, and copy
-these four files from `windows/` into one directory such as `C:\Temp\CertM-Agent`:
-
-- `CertM.Agent.ps1`
-- `CertM.Update.ps1`
-- `Install-CertMAgent.ps1`
-- `Uninstall-CertMAgent.ps1`
-
-The files may also be downloaded on another trusted administrator workstation and copied
-to the server. Keep all four files in the same directory. Open PowerShell as Administrator,
-then run:
+1. Download `main.zip` on a trusted administrator computer.
+2. Copy these files from the `windows` directory to
+   `C:\Temp\CertM-Agent`:
+   `CertM.Agent.ps1`, `CertM.Update.ps1`, `Install-CertMAgent.ps1`, and
+   `Uninstall-CertMAgent.ps1`.
+3. Open PowerShell as Administrator and run:
 
 ```powershell
 Set-Location 'C:\Temp\CertM-Agent'
@@ -221,8 +199,7 @@ $credentialPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secu
 try {
     $plainCredential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($credentialPointer)
     .\Install-CertMAgent.ps1 `
-        -ApiBase 'https://certm.pmr.vn/api/v2' `
-        -DisplayName 'IIS Download Server' `
+        -DisplayName 'IIS Server 01' `
         -EnrollmentToken $plainCredential `
         -RunOnce `
         -EnableTask
@@ -233,203 +210,149 @@ finally {
 }
 ```
 
-This command performs initial enrollment and enables the six-hour task. For a supervised
-staged installation, omit `-EnableTask`; the installer will run once for enrollment but
-leave the task disabled until an administrator enables it.
+### Windows checks and logs
 
-The installer uses the PowerShell `ScheduledTasks` module to create a normal native Windows
-Task Scheduler task. It does not replace or bypass Windows Task Scheduler; it only avoids
-calling the separate `schtasks.exe` command-line program.
-
-The default installer behavior without `-RunOnce` or `-EnableTask` is staged: it creates
-the scheduled task in a disabled state and does not run the agent. This prevents enrollment
-or certificate changes from racing ahead of administrator validation.
-
-The enrollment key is only a non-empty, administrator-rotatable bootstrap gate against unsolicited enrollment. It has no minimum length requirement and is not a long-lived client credential. A successful enrollment replaces it locally with a unique client token and removes the enrollment-token field completely. Exactly one credential field exists at a time. Windows protects the active credential with DPAPI; Linux protects its configuration with mode `0600`. Rotating the enrollment key affects only future enrollments.
-
-Every IIS HTTPS binding with a host name is evaluated dynamically on each run. There is no static domain allowlist in the agent configuration. CertM returns a deployment only when a certificate assigned to that client covers the binding domain.
-
-To upgrade an existing installation while preserving its DPAPI-protected client identity, run the installer without an enrollment token:
+After the client is approved and certificates are assigned:
 
 ```powershell
-.\Install-CertMAgent.ps1 -DisplayName 'IIS Download Server'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\CertM\bin\CertM.Agent.ps1' -Mode Discover
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\CertM\bin\CertM.Agent.ps1' -Mode Inventory
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\CertM\bin\CertM.Agent.ps1' -Mode DryRun
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\CertM\bin\CertM.Agent.ps1' -Mode Run
 ```
 
-An existing installation also preserves whether `CertM IIS Agent` was enabled
-or disabled. That single six-hour task checks for approved agent updates before
-running certificate work. The installer does not run a certificate cycle unless
-`-RunOnce` is supplied explicitly.
-
-Starting with RC30, the Windows agent performs an agent-only update. It verifies
-the package SHA-256, pinned RSA signing key, package signature, manifest, file
-hash, PowerShell syntax, and embedded agent version, but replaces only
-`C:\CertM\bin\CertM.Agent.ps1`. It never launches the legacy updater during a
-normal scheduled run and does not rewrite `CertM.Update.ps1` or the uninstaller.
-This avoids the repeated multi-script and self-replacement behavior classified
-as ransomware by endpoint-protection behavior engines.
-
-RC30 also acts as a transition release for older Windows installations. If an
-endpoint-protection product terminates the legacy updater after the RC30 agent
-file has already been installed, the next RC30 agent run recognizes the exact
-assigned version and reports the interrupted update as recovered without
-rewriting any file. The legacy updater remains installed only for compatibility
-and manual recovery; RC30 and later agents do not invoke it.
-
-Inspect current IIS bindings without contacting CertM or changing certificates:
+Check the scheduled task:
 
 ```powershell
-& 'C:\CertM\bin\CertM.Agent.ps1' -Mode Discover
-```
-
-Enroll a new client after discovery has been reviewed. Enrollment exits without changing IIS while the client waits for administrator approval:
-
-```powershell
-& 'C:\CertM\bin\CertM.Agent.ps1'
-```
-
-After client approval, evaluate desired changes without importing a PFX or changing IIS:
-
-```powershell
-& 'C:\CertM\bin\CertM.Agent.ps1' -Mode DryRun
-```
-
-After reviewing the dry run, perform one supervised deployment and only then enable automation:
-
-```powershell
-& 'C:\CertM\bin\CertM.Agent.ps1'
-Enable-ScheduledTask -TaskName 'CertM IIS Agent'
-```
-
-The installer creates:
-
-- task `CertM IIS Agent`, running as `SYSTEM` at the configured interval and disabled by default;
-- no separate update task; the same task checks software updates first;
-- program directory `C:\CertM\bin`;
-- protected configuration `C:\CertM\config.json`;
-- state file `C:\CertM\state.json` after the first deployment;
-- log file `C:\CertM\logs\agent.log`;
-- temporary PFX staging directory `C:\CertM\staging`.
-
-After the initial run, approve the new client in the CertM dashboard. To retry immediately:
-
-```powershell
-Start-ScheduledTask -TaskName 'CertM IIS Agent'
-Get-Content 'C:\CertM\logs\agent.log' -Tail 50
-```
-
-Operators can also press `Win+R`, run `taskschd.msc`, open **Task Scheduler Library**, and
-select **CertM IIS Agent**. The task's General, Triggers, Actions, History, Last Run Time,
-Last Run Result, and Next Run Time remain visible through the standard Windows interface.
-
-Equivalent PowerShell checks are:
-
-```powershell
-Get-ScheduledTask -TaskName 'CertM IIS Agent' |
-    Select-Object TaskName, State
-
+Get-ScheduledTask -TaskName 'CertM IIS Agent'
 Get-ScheduledTaskInfo -TaskName 'CertM IIS Agent' |
     Select-Object LastRunTime, LastTaskResult, NextRunTime
 ```
 
-### Uninstall
-
-Keep configuration, state, and logs:
+Enable or disable automation:
 
 ```powershell
-.\Uninstall-CertMAgent.ps1
+Enable-ScheduledTask -TaskName 'CertM IIS Agent'
+Disable-ScheduledTask -TaskName 'CertM IIS Agent'
 ```
 
-Remove all CertM agent data as well:
+Collect logs for the CertM administrator:
 
 ```powershell
-.\Uninstall-CertMAgent.ps1 -RemoveData
+Get-Content 'C:\CertM\logs\agent.log' -Tail 100
+Get-Content 'C:\CertM\logs\agent-update.log' -Tail 100
 ```
+
+Important locations:
+
+- Configuration: `C:\CertM\config.json`
+- Agent: `C:\CertM\bin`
+- Logs: `C:\CertM\logs`
+- Update staging: `C:\CertM\staging`
+
+Do not send `config.json` to another person because it contains the protected
+client identity for that Windows server.
 
 ## pfSense HAProxy agent
 
-The pfSense agent runs with the PHP runtime bundled with pfSense CE or pfSense
-Plus. It discovers active SSL-offloading frontends in the HAProxy package and
-reports their Certificate Manager references to CertM.
+Requirements:
 
-The agent never edits generated files under `/var/etc/haproxy`. During renewal
-it validates the downloaded leaf, key, full chain, fingerprint, and every
-discovered hostname, then updates the existing pfSense certificate entry while
-preserving its `refid`. Intermediate certificates are imported into pfSense
-Certificate Manager and linked through `caref`. The agent saves a normal
-pfSense configuration revision with `write_config()`, regenerates and reloads
-HAProxy through `haproxy_check_run(1)`, verifies the installed fingerprint, and
-reports the deployment to CertM. Any reload or verification failure restores
-the previous certificate and CA arrays and reloads HAProxy again.
+- pfSense CE or pfSense Plus;
+- the pfSense HAProxy package;
+- outbound HTTPS access to CertM;
+- a root shell.
 
-Exact `host_matches` ACL domains that do not yet have a matching certificate are
-reported as pending bindings. After a matching CertM profile is assigned, the
-agent creates a new Certificate Manager entry and attaches it as an additional
-HAProxy certificate; it never replaces the shared or primary certificate for a
-new domain. Domains assigned to the same published certificate are consolidated
-into one pfSense certificate entry. Rollback also restores the complete HAProxy
-frontend array when onboarding fails.
+### Automatic installation
 
-Install from the pfSense root shell:
+Run from the pfSense root shell:
 
 ```sh
 fetch -qo /tmp/install-certm-pfsense.sh \
-  https://raw.githubusercontent.com/radionu/certm-agent/main/pfsense/install.sh
-sh /tmp/install-certm-pfsense.sh
+  'https://raw.githubusercontent.com/radionu/certm-agent/main/pfsense/install.sh'
+/bin/sh -n /tmp/install-certm-pfsense.sh && \
+  /bin/sh /tmp/install-certm-pfsense.sh
 ```
 
-The installer performs preflight checks, enrolls the firewall, and registers a
-native pfSense cron entry at minute 21 every six hours. It stores the agent and
-operator command under `/conf/certm`, installs an executable copy of
-`certm-haproxy` under `/usr/local/sbin`, and stores the client configuration with
-mode 0600. The cron entry invokes the persistent `/conf` command through
-`/bin/sh`, so it also works when `/conf` is mounted with `noexec`; losing the
-convenience copy during an operating-system upgrade does not stop scheduled
-renewals.
-Approve the new `pfsense-haproxy` client and assign the appropriate certificate
-profiles before deploying anything.
+Enter the CertM address, display name and bootstrap credential when asked. The
+installer enrolls the firewall and creates a six-hour pfSense cron entry.
 
-Inspect local enrollment, API state, active bindings, cron state, and the last
-log record without displaying credentials or private keys:
+### Manual installation
+
+Use this method when the firewall cannot download files from GitHub. Copy these
+files from the repository `pfsense` directory to the firewall:
+
+- `CertM.HAProxy.Agent.php`
+- `certm-haproxy`
+- `config.example.json`
+
+Then run:
+
+```sh
+mkdir -p /conf/certm
+chmod 700 /conf/certm
+cp /tmp/CertM.HAProxy.Agent.php /conf/certm/CertM.HAProxy.Agent.php
+cp /tmp/certm-haproxy /conf/certm/certm-haproxy
+cp /tmp/config.example.json /conf/certm/config.json
+chmod 700 /conf/certm/CertM.HAProxy.Agent.php /conf/certm/certm-haproxy
+chmod 600 /conf/certm/config.json
+cp /conf/certm/certm-haproxy /usr/local/sbin/certm-haproxy
+chmod 700 /usr/local/sbin/certm-haproxy
+vi /conf/certm/config.json
+/bin/sh /conf/certm/certm-haproxy preflight
+/bin/sh /conf/certm/certm-haproxy enroll
+/bin/sh /conf/certm/certm-haproxy enable
+```
+
+In `config.json`, replace the example display name and bootstrap credential
+before running `enroll`.
+
+### pfSense checks and logs
+
+After the CertM administrator approves the client and assigns certificates:
 
 ```sh
 certm-haproxy status
-```
-
-Review the exact planned certificate changes:
-
-```sh
+certm-haproxy inventory
 certm-haproxy dry-run
+certm-haproxy renew
+certm-haproxy logs 100
 ```
 
-Run one supervised renewal:
+Other operator commands:
 
 ```sh
-certm-haproxy renew
-certm-haproxy logs 50
+certm-haproxy enable
+certm-haproxy disable
+certm-haproxy update
 ```
 
-The agent is a bounded scheduled job, not a persistent daemon. Operators can
-use `certm-haproxy enable` or `disable` for the native cron entry and
-`certm-haproxy update` for a supervised refresh. Update downloads the installer,
-checks its shell syntax, then lets the installer download and validate both the
-PHP agent and operator command before replacing them. Enrollment identity is
-preserved. The agent does not install an ACME client on the firewall. For a
-pfSense HA pair, enroll only the configuration-primary node until HA
-synchronization behavior has been verified in that environment.
+If the short command is unavailable after a pfSense upgrade, use the persistent
+copy:
 
-### API v2 compatibility
+```sh
+/bin/sh /conf/certm/certm-haproxy status
+/bin/sh /conf/certm/certm-haproxy update
+```
 
-| Purpose | Endpoint |
-|---|---|
-| Preflight | `GET /api/v2/client/preflight` |
-| Enrollment | `POST /api/v2/client/enroll` |
-| Client state | `GET /api/v2/client/status` |
-| IIS inventory | `POST /api/v2/client/inventory` |
-| Desired package | `GET /api/v2/cert/desired?domain=...` |
-| PFX download | `GET /api/v2/cert/download?domain=...&service=iis&port=...&format=pfx` |
-| pfSense HAProxy PEM download | `GET /api/v2/cert/download?domain=...&service=pfsense-haproxy&port=...` |
-| Verified report | `POST /api/v2/deployment/report` |
-| Agent update check | `GET /api/v2/client/agent-update` |
-| Agent update report | `POST /api/v2/client/agent-update/report` |
+Important locations:
 
-All authenticated calls send both the bearer token and `X-CertM-Machine-ID`.
+- Configuration and agent: `/conf/certm`
+- Log: `/var/log/certm-haproxy.log`
+- Scheduled job: native pfSense cron, minute 21 every six hours
+
+For a pfSense HA pair, install initially on the configuration-primary node only.
+Confirm the site's HA synchronization behavior before installing on the second
+node.
+
+## Getting help
+
+Send the CertM administrator:
+
+1. the client display name;
+2. the command that failed;
+3. the complete error shown by that command;
+4. the last 100 agent log lines;
+5. the approximate time when the problem occurred.
+
+Do not send private keys, bootstrap credentials, client tokens, `config.json`, or
+complete certificate packages through chat or email.

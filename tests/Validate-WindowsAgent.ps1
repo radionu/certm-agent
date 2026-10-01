@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.29'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.30'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -74,8 +74,12 @@ Assert-True ($installer -match '\$legacyUpdateTaskName[\s\S]+Unregister-Schedule
     'The installer must retire the legacy software-update task.'
 Assert-True ($agent -match '\[switch\]\$SkipUpdateCheck') `
     'The IIS agent must support a non-recursive combined run.'
-Assert-True ($agent -match 'CertM\.Update\.ps1[\s\S]+certificate work will continue') `
+Assert-True ($agent -match 'function\s+Invoke-EmbeddedAgentUpdate') `
+    'The IIS agent must own its agent-only update flow.'
+Assert-True ($agent -match 'Invoke-EmbeddedAgentUpdate[\s\S]+certificate work will continue') `
     'The IIS task must check updates first without blocking certificate work.'
+Assert-True ($agent -notmatch '-File\s+\$updaterPath') `
+    'The IIS task must not launch the legacy self-replacing PowerShell updater.'
 Assert-True ($agent -match 'ip_pending_approval[\s\S]+source_ip') `
     'The IIS agent must explain source-IP approval blocks.'
 Assert-True ($updater -match 'ip_pending_approval[\s\S]+source_ip') `
@@ -88,10 +92,14 @@ Assert-True ($updater -match 'VerifyData\(\$bytes, ''SHA256''') `
     'The updater must verify the package RSA-SHA256 signature.'
 Assert-True ($updater -match "'ROLLBACK'") `
     'The updater must report rollback after a failed installation.'
-Assert-True ($updater -match 'function\s+Get-RuntimeInstallOrder[\s\S]+CertM\.Update\.ps1[\s\S]+Uninstall-CertMAgent\.ps1[\s\S]+CertM\.Agent\.ps1') `
-    'The updater must install itself first and the agent version marker last.'
-Assert-True ($updater -match 'Get-InstalledUpdaterVersion\) -ne \$Version') `
-    'The updater self-test must verify that both agent and updater reached the assigned version.'
+Assert-True ($agent -match 'function\s+Test-AgentOnlyUpdateManifest[\s\S]+windows\\CertM\.Agent\.ps1') `
+    'The embedded updater must require the signed Windows agent runtime.'
+Assert-True ($agent -match 'Copy-Item -LiteralPath \$source -Destination \$temporary[\s\S]+Move-Item -LiteralPath \$temporary -Destination \$target') `
+    'The embedded updater must replace only the staged agent runtime atomically.'
+Assert-True ($agent -match 'Windows agent runtime \$version installed without replacing the updater') `
+    'The embedded updater must record that it did not replace its updater.'
+Assert-True ($agent -match 'function\s+Complete-InterruptedAgentUpdate[\s\S]+recovered after endpoint protection interrupted the legacy updater') `
+    'The installed agent must recover an exact-version assignment interrupted by endpoint protection.'
 Assert-True ($bootstrap -match "'CertM.Update.ps1'") `
     'The bootstrap must require the updater in every release.'
 Assert-True ($installer -match '\[string\]\$DisplayName') `

@@ -6,8 +6,6 @@ AGENT_DIR='/conf/certm'
 AGENT_PATH="${AGENT_DIR}/CertM.HAProxy.Agent.php"
 LOG_PATH='/var/log/certm-haproxy.log'
 PHP_BIN='/usr/local/bin/php'
-FETCH_BIN='/usr/bin/fetch'
-INSTALL_URL='https://raw.githubusercontent.com/radionu/certm-agent/main/pfsense/install.sh'
 
 if [ ! -f "${AGENT_PATH}" ]; then
     echo "FAILED: CertM agent is missing: ${AGENT_PATH}" >&2
@@ -45,11 +43,7 @@ case "${command_name}" in
             echo 'FAILED: Run update as root on pfSense.' >&2
             exit 1
         fi
-        temporary="/tmp/install-certm-pfsense.$$"
-        trap 'rm -f "${temporary}"' EXIT HUP INT TERM
-        "${FETCH_BIN}" -qo "${temporary}" "${INSTALL_URL}"
-        /bin/sh -n "${temporary}"
-        /bin/sh "${temporary}"
+        exec "${PHP_BIN}" -f "${AGENT_PATH}" update
         ;;
     help|-h|--help)
         echo 'Usage: certm-haproxy status|preflight|enroll|inventory|dry-run|renew|run|enable|disable|logs [lines]|update'

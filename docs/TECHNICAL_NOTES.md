@@ -22,9 +22,9 @@ operations bootstrap credential. After enrollment, the agent stores a unique
 client identity locally. Certificate work remains blocked until required client
 and source-IP approvals are complete.
 
-Linux and Windows perform software update checking inside the same six-hour task
-used for certificate work. pfSense runs a bounded six-hour cron job. None of the
-agents requires a permanent connection from CertM to the managed system.
+Linux, Windows and pfSense perform software update checking inside the same
+six-hour task used for certificate work. pfSense runs a bounded cron job rather
+than a permanent service. No agent requires a permanent connection from CertM.
 
 ## Deployment safety
 
@@ -63,15 +63,11 @@ is explicitly requested.
 
 ## Updates and releases
 
-Approved Linux and Windows updates are downloaded from the authenticated CertM
-server. Packages are checked against their manifest, SHA-256 digest and release
-signature before installation. An update failure must not block certificate
-inventory and renewal.
+Approved Linux, Windows and pfSense updates are downloaded from the
+authenticated CertM server. Packages are checked against their manifest, SHA-256
+digest and release signature before installation. An update failure must not
+block certificate inventory and renewal.
 
-The pfSense operator command currently performs a supervised refresh from the
-public repository while preserving local enrollment configuration.
-
-Documentation-only changes do not require a new agent version. Code releases
-must update all relevant version constants and manifests, pass the Linux,
-Windows and pfSense validation suites, and publish the required release
-artifacts.
+Documentation-only changes do not require a new agent version. Code changes
+bump only the affected platform version. Every platform package must pass the
+Linux, Windows and pfSense validation suites before it is published.

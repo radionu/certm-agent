@@ -92,8 +92,25 @@ class PfSenseAgentContractTest(unittest.TestCase):
             "update)",
         ):
             self.assertIn(command, COMMAND)
-        self.assertIn("/bin/sh -n", COMMAND)
-        self.assertIn('/bin/sh "${temporary}"', COMMAND)
+        self.assertIn(
+            'exec "${PHP_BIN}" -f "${AGENT_PATH}" update',
+            COMMAND,
+        )
+        self.assertNotIn("raw.githubusercontent.com", COMMAND)
+
+    def test_update_uses_signed_certm_packages_and_can_roll_back(self):
+        for contract in (
+            "'client/agent-update'",
+            "'client/agent-update/key'",
+            "'client/agent-update/report'",
+            "openssl_verify(",
+            "signing_key_fingerprint",
+            "'platform'] ?? null) !== 'pfsense'",
+            "$modified ? 'ROLLBACK' : 'FAILED'",
+            "certm_scheduled_run()",
+            "certificate work will continue",
+        ):
+            self.assertIn(contract, AGENT)
 
     def test_installer_keeps_identity_when_refreshing_agent_code(self):
         self.assertIn('if [ ! -f "${CONFIG_PATH}" ]', INSTALLER)

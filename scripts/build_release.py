@@ -18,9 +18,6 @@ PLATFORM_FILES = {
         "linux/certm_agent/apache.py",
         "linux/systemd/certm-agent.service",
         "linux/systemd/certm-agent.timer",
-        # RC12's updater requires these paths while installing transitional
-        # RC13. RC13 removes the units locally and accepts their omission in
-        # subsequent package manifests.
         "linux/systemd/certm-agent-update.service",
         "linux/systemd/certm-agent-update.timer",
     ],
@@ -29,7 +26,34 @@ PLATFORM_FILES = {
         "windows/CertM.Update.ps1",
         "windows/Uninstall-CertMAgent.ps1",
     ],
+    "pfsense": [
+        "pfsense/CertM.HAProxy.Agent.php",
+        "pfsense/certm-haproxy",
+    ],
 }
+
+VERSION_SOURCES = {
+    "linux": (
+        "linux/certm-agent.py",
+        r'^AGENT_VERSION\s*=\s*["\']([^"\']+)',
+    ),
+    "windows": (
+        "windows/CertM.Agent.ps1",
+        r"AgentVersion\s*=\s*'([^']+)'",
+    ),
+    "pfsense": (
+        "pfsense/CertM.HAProxy.Agent.php",
+        r"CERTM_PFSENSE_AGENT_VERSION\s*=\s*'([^']+)'",
+    ),
+}
+
+
+def declared_version(root, platform):
+    relative, pattern = VERSION_SOURCES[platform]
+    match = re.search(pattern, (root / relative).read_text(), re.M | re.I)
+    if not match:
+        raise SystemExit(f"Unable to read {platform} agent version")
+    return match.group(1)
 
 
 def manifest(root, platform, version):
@@ -50,20 +74,36 @@ def manifest(root, platform, version):
     }
 
 
-def check_version(root, version):
-    checks = {
-        "linux/certm-agent.py": r'^AGENT_VERSION\s*=\s*["\']([^"\']+)',
-        "linux/certm-agent-update.py": r'^UPDATER_VERSION\s*=\s*["\']([^"\']+)',
-        "windows/CertM.Agent.ps1": r"AgentVersion\s*=\s*'([^']+)'",
-        "windows/CertM.Update.ps1": r"UpdaterVersion\s*=\s*'([^']+)'",
-    }
-    for relative, pattern in checks.items():
-        match = re.search(pattern, (root / relative).read_text(), re.M | re.I)
+def check_platform_version(root, platform, version):
+    if declared_version(root, platform) != version:
+        raise SystemExit(
+            f"{platform} runtime does not declare version {version}"
+        )
+    if platform == "linux":
+        updater = (root / "linux/certm-agent-update.py").read_text()
+        match = re.search(
+            r'^UPDATER_VERSION\s*=\s*["\']([^"\']+)',
+            updater,
+            re.M,
+        )
         if not match or match.group(1) != version:
-            raise SystemExit(f"{relative} does not declare version {version}")
+            raise SystemExit(
+                "linux/certm-agent-update.py has a different version"
+            )
+    if platform == "windows":
+        updater = (root / "windows/CertM.Update.ps1").read_text()
+        match = re.search(
+            r"UpdaterVersion\s*=\s*'([^']+)'",
+            updater,
+            re.I,
+        )
+        if not match or match.group(1) != version:
+            raise SystemExit(
+                "windows/CertM.Update.ps1 has a different version"
+            )
 
 
-def build_linux(root, output, data):
+def build_tar(root, output, platform, data):
     manifest_bytes = (json.dumps(data, indent=2) + "\n").encode()
     with tarfile.open(output, "w:gz") as archive:
         info = tarfile.TarInfo("manifest.json")
@@ -71,35 +111,70 @@ def build_linux(root, output, data):
         info.mode = 0o644
         info.mtime = 0
         archive.addfile(info, io.BytesIO(manifest_bytes))
-        for relative in PLATFORM_FILES["linux"]:
-            archive.add(root / relative, arcname=relative, recursive=False)
+        for relative in PLATFORM_FILES[platform]:
+            archive.add(
+                root / relative,
+                arcname=relative,
+                recursive=False,
+            )
 
 
 def build_windows(root, output, data):
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps(data, indent=2) + "\n")
+        archive.writestr(
+            "manifest.json",
+            json.dumps(data, indent=2) + "\n",
+        )
         for relative in PLATFORM_FILES["windows"]:
             archive.write(root / relative, relative)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build CertM signed-update payloads")
-    parser.add_argument("version")
+    parser = argparse.ArgumentParser(
+        description="Build independent CertM agent update packages"
+    )
+    parser.add_argument(
+        "version",
+        nargs="?",
+        help="Optional version assertion for selected platforms",
+    )
+    parser.add_argument(
+        "--platform",
+        action="append",
+        choices=tuple(PLATFORM_FILES),
+        dest="platforms",
+        help="Build only this platform; may be repeated",
+    )
     parser.add_argument("--output", default="dist")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    check_version(root, args.version)
+    platforms = args.platforms or list(PLATFORM_FILES)
+    built = []
 
-    linux_path = output / f"certm-agent-linux-{args.version}.tar.gz"
-    windows_path = output / f"certm-agent-windows-{args.version}.zip"
-    build_linux(root, linux_path, manifest(root, "linux", args.version))
-    build_windows(root, windows_path, manifest(root, "windows", args.version))
+    for platform in platforms:
+        version = declared_version(root, platform)
+        if args.version is not None and version != args.version:
+            raise SystemExit(
+                f"{platform} declares {version}, not {args.version}"
+            )
+        check_platform_version(root, platform, version)
+        extension = ".zip" if platform == "windows" else ".tar.gz"
+        path = output / (
+            f"certm-agent-{platform}-{version}{extension}"
+        )
+        data = manifest(root, platform, version)
+        if platform == "windows":
+            build_windows(root, path, data)
+        else:
+            build_tar(root, path, platform, data)
+        built.append(path)
 
-    for path in (linux_path, windows_path):
-        print(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path}")
+    for path in built:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        print(f"{digest}  {path}")
 
 
 if __name__ == "__main__":

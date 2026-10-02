@@ -3,8 +3,11 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
-## Unreleased
+## 1.0.0-rc.34 (pfSense)
 
+- Added signed pfSense updates delivered through the authenticated CertM server.
+- Added automatic update checks to the existing six-hour pfSense run, with rollback and status reporting.
+- Split Linux, Windows and pfSense package versions so unchanged platforms are not republished.
 - Added the pfSense HAProxy agent.
 - Added the persistent `certm-haproxy` operator command and six-hour pfSense cron
   schedule.

@@ -325,6 +325,8 @@ certm-haproxy disable
 certm-haproxy update
 ```
 
+Lệnh `update` chỉ cài version pfSense đã được gán hoặc duyệt trên CertM.
+
 Nếu lệnh ngắn không còn sau khi nâng cấp pfSense, dùng bản lưu trong `/conf`:
 
 ```sh

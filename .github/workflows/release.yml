@@ -1,4 +1,4 @@
-name: Publish agent release
+name: Publish agent releases
 
 on:
   push:
@@ -17,12 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate and test agent
+      - name: Validate and test agents
         run: |
           python3 -m py_compile linux/certm-agent.py linux/certm-agent-update.py linux/certm_agent/*.py scripts/build_release.py
           python3 -m json.tool linux/agent.json.example >/dev/null
           python3 -m json.tool windows/config.example.json >/dev/null
-          bash -n linux/install.sh linux/install-zimbra.sh
+          python3 -m json.tool pfsense/config.example.json >/dev/null
+          bash -n linux/install.sh linux/install-zimbra.sh pfsense/install.sh pfsense/certm-haproxy
           python3 -m unittest discover -s tests -v
 
       - name: Validate Windows PowerShell
@@ -45,57 +46,68 @@ jobs:
           if ($failed) { exit 1 }
           ./tests/Validate-WindowsAgent.ps1
 
-      - name: Read version
-        id: release
-        shell: bash
+      - name: Build independent platform packages
         run: |
-          version="$(python3 - <<'PY'
-          import pathlib
-          import re
-
-          text = pathlib.Path('linux/certm-agent.py').read_text()
-          match = re.search(r'^AGENT_VERSION\s*=\s*["\u0027]([^"\u0027]+)', text, re.M)
-          if not match:
-              raise SystemExit('Unable to read AGENT_VERSION')
-          print(match.group(1))
-          PY
-          )"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          if [[ "$version" == *-* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build packages
-        run: |
-          python3 scripts/build_release.py "${{ steps.release.outputs.version }}" --output dist
+          python3 scripts/build_release.py --output dist
           (cd dist && sha256sum certm-agent-* > SHA256SUMS)
 
-      - name: Publish GitHub release
+      - name: Publish missing platform releases
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-          TAG: ${{ steps.release.outputs.tag }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; leaving its immutable assets unchanged."
-            exit 0
-          fi
+          set -euo pipefail
 
-          release_args=()
-          if [[ "$PRERELEASE" == "true" ]]; then
-            release_args+=(--prerelease)
-          fi
+          for platform in linux windows pfsense; do
+            if [[ "$platform" == "windows" ]]; then
+              asset="$(find dist -maxdepth 1 -name "certm-agent-$platform-*.zip" -print -quit)"
+              version="${asset##*/certm-agent-$platform-}"
+              version="${version%.zip}"
+            else
+              asset="$(find dist -maxdepth 1 -name "certm-agent-$platform-*.tar.gz" -print -quit)"
+              version="${asset##*/certm-agent-$platform-}"
+              version="${version%.tar.gz}"
+            fi
 
-          gh release create "$TAG" \
-            dist/certm-agent-linux-$VERSION.tar.gz \
-            dist/certm-agent-windows-$VERSION.zip \
-            dist/SHA256SUMS \
-            --target "$GITHUB_SHA" \
-            --title "CertM Agent $VERSION" \
-            --notes "Validated Linux and Windows update packages for CertM Agent $VERSION." \
-            "${release_args[@]}"
+            if [[ -z "$asset" || -z "$version" ]]; then
+              echo "Unable to locate $platform release package."
+              exit 1
+            fi
+
+            filename="$(basename "$asset")"
+            tag="$platform-v$version"
+            legacy_tag="v$version"
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "Release $tag already exists."
+              continue
+            fi
+            if gh release view "$legacy_tag" --json assets --jq '.assets[].name' 2>/dev/null |
+              grep -Fxq "$filename"
+            then
+              echo "Legacy release $legacy_tag already contains $filename."
+              continue
+            fi
+
+            release_dir="dist/release-$platform"
+            mkdir -p "$release_dir"
+            sha256sum "$asset" |
+              sed "s#  .*#  $filename#" > "$release_dir/SHA256SUMS"
+
+            release_args=()
+            if [[ "$version" == *-* ]]; then
+              release_args+=(--prerelease)
+            fi
+
+            display="$(tr '[:lower:]' '[:upper:]' <<< "${platform:0:1}")${platform:1}"
+            publish_args=(
+              "$tag"
+              "$asset"
+              "$release_dir/SHA256SUMS"
+              --target "$TARGET_SHA"
+              --title "CertM $display Agent $version"
+              --notes "Validated $display update package for CertM Agent $version."
+            )
+            gh release create "${publish_args[@]}" "${release_args[@]}"
+          done

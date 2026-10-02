@@ -326,6 +326,8 @@ certm-haproxy disable
 certm-haproxy update
 ```
 
+`update` installs only the pfSense version assigned or approved in CertM.
+
 If the short command is unavailable after a pfSense upgrade, use the persistent
 copy:
 

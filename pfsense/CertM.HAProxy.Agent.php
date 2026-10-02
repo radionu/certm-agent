@@ -3,12 +3,15 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.33';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.34';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
 const CERTM_PFSENSE_LOG = '/var/log/certm-haproxy.log';
 const CERTM_PFSENSE_LOCK = '/var/run/certm-haproxy.lock';
+const CERTM_PFSENSE_PUBLIC_KEY = '/conf/certm/update-public.pem';
+const CERTM_PFSENSE_COMMAND = '/conf/certm/certm-haproxy';
+const CERTM_PFSENSE_COMMAND_LINK = '/usr/local/sbin/certm-haproxy';
 
 function certm_log(string $message, string $level = 'INFO'): void
 {
@@ -183,6 +186,409 @@ function certm_api(
         throw new RuntimeException("CertM HTTP {$status}: {$message}", $status);
     }
     return $decoded;
+}
+
+
+function certm_update_report(
+    array $config,
+    string $token,
+    int $releaseId,
+    string $status,
+    string $message,
+    ?string $version = null
+): void {
+    $body = [
+        'release_id' => $releaseId,
+        'status' => $status,
+        'message' => substr($message, 0, 2000),
+    ];
+    if ($version !== null) {
+        $body['installed_version'] = $version;
+    }
+    certm_api(
+        $config,
+        'POST',
+        'client/agent-update/report',
+        $token,
+        null,
+        $body
+    );
+}
+
+function certm_download_update(
+    array $config,
+    string $token,
+    string $path,
+    string $destination
+): void {
+    if (!preg_match('#^/client/agent-update/download/[0-9]+$#', $path)) {
+        certm_fail('CertM returned an invalid pfSense update download path.');
+    }
+    $handle = fopen($destination, 'wb');
+    if ($handle === false) {
+        certm_fail('Unable to create the pfSense update package.');
+    }
+    $curl = curl_init($config['api_base'].$path);
+    if ($curl === false) {
+        fclose($handle);
+        certm_fail('Unable to initialize the pfSense update download.');
+    }
+    curl_setopt_array($curl, [
+        CURLOPT_FILE => $handle,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_TIMEOUT => 120,
+        CURLOPT_HTTPHEADER => certm_headers($token),
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+    ]);
+    $ok = curl_exec($curl);
+    $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+    $error = curl_error($curl);
+    curl_close($curl);
+    fclose($handle);
+    if ($ok !== true || $status !== 200) {
+        @unlink($destination);
+        certm_fail(
+            "CertM update download failed with HTTP {$status}: {$error}"
+        );
+    }
+}
+
+function certm_pin_update_key(
+    array $config,
+    string $token,
+    string $expectedFingerprint
+): string {
+    $metadata = certm_api(
+        $config,
+        'GET',
+        'client/agent-update/key',
+        $token
+    );
+    $pem = (string) ($metadata['pem'] ?? '');
+    $fingerprint = hash('sha256', $pem);
+    if (
+        ($metadata['algorithm'] ?? null) !== 'RSA-SHA256' ||
+        !hash_equals(
+            (string) ($metadata['fingerprint_sha256'] ?? ''),
+            $fingerprint
+        ) ||
+        !hash_equals($expectedFingerprint, $fingerprint) ||
+        openssl_pkey_get_public($pem) === false
+    ) {
+        certm_fail('CertM agent-update signing key validation failed.');
+    }
+    if (is_file(CERTM_PFSENSE_PUBLIC_KEY)) {
+        $pinned = (string) file_get_contents(CERTM_PFSENSE_PUBLIC_KEY);
+        if (!hash_equals(hash('sha256', $pinned), $fingerprint)) {
+            certm_fail(
+                'CertM signing key differs from the pinned pfSense key.'
+            );
+        }
+    } else {
+        $temporary = CERTM_PFSENSE_PUBLIC_KEY.'.tmp.'.getmypid();
+        if (file_put_contents($temporary, $pem, LOCK_EX) === false) {
+            certm_fail('Unable to pin the CertM signing key.');
+        }
+        chmod($temporary, 0600);
+        if (!rename($temporary, CERTM_PFSENSE_PUBLIC_KEY)) {
+            @unlink($temporary);
+            certm_fail('Unable to install the CertM signing key.');
+        }
+        certm_log("Pinned agent-update public key {$fingerprint}");
+    }
+    return $pem;
+}
+
+function certm_remove_tree(string $path): void
+{
+    if (!is_dir($path)) {
+        @unlink($path);
+        return;
+    }
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(
+            $path,
+            FilesystemIterator::SKIP_DOTS
+        ),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($iterator as $item) {
+        $item->isDir()
+            ? @rmdir($item->getPathname())
+            : @unlink($item->getPathname());
+    }
+    @rmdir($path);
+}
+
+function certm_verify_update_package(
+    string $archive,
+    string $root,
+    string $version
+): array {
+    $output = [];
+    $code = 0;
+    exec(
+        '/usr/bin/tar -xzf '.escapeshellarg($archive).
+        ' -C '.escapeshellarg($root).' 2>&1',
+        $output,
+        $code
+    );
+    if ($code !== 0) {
+        certm_fail(
+            'Unable to extract pfSense update: '.implode(' ', $output)
+        );
+    }
+    $manifestPath = $root.'/manifest.json';
+    $manifest = is_file($manifestPath)
+        ? json_decode((string) file_get_contents($manifestPath), true)
+        : null;
+    if (
+        !is_array($manifest) ||
+        ($manifest['schema'] ?? null) !== 1 ||
+        ($manifest['platform'] ?? null) !== 'pfsense' ||
+        ($manifest['version'] ?? null) !== $version
+    ) {
+        certm_fail('Invalid pfSense agent update manifest.');
+    }
+
+    $expected = [
+        'pfsense/CertM.HAProxy.Agent.php',
+        'pfsense/certm-haproxy',
+    ];
+    $declared = [];
+    foreach (($manifest['files'] ?? []) as $file) {
+        $relative = (string) ($file['path'] ?? '');
+        $hash = (string) ($file['sha256'] ?? '');
+        $path = $root.'/'.$relative;
+        if (
+            !in_array($relative, $expected, true) ||
+            isset($declared[$relative]) ||
+            !preg_match('/^[a-f0-9]{64}$/', $hash) ||
+            !is_file($path) ||
+            !hash_equals($hash, hash_file('sha256', $path))
+        ) {
+            certm_fail("Invalid pfSense update file: {$relative}");
+        }
+        $declared[$relative] = true;
+    }
+    $declaredFiles = array_keys($declared);
+    sort($declaredFiles);
+    sort($expected);
+    if ($declaredFiles !== $expected) {
+        certm_fail('The pfSense update package is incomplete.');
+    }
+
+    $actual = [];
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(
+            $root,
+            FilesystemIterator::SKIP_DOTS
+        )
+    );
+    foreach ($iterator as $item) {
+        if ($item->isLink() || !$item->isFile()) {
+            certm_fail('The pfSense update package has an unsafe entry.');
+        }
+        $actual[] = substr(
+            $item->getPathname(),
+            strlen($root) + 1
+        );
+    }
+    sort($actual);
+    $allowed = array_merge(['manifest.json'], $expected);
+    sort($allowed);
+    if ($actual !== $allowed) {
+        certm_fail('The pfSense update package has undeclared files.');
+    }
+
+    exec(
+        '/usr/local/bin/php -l '.
+        escapeshellarg($root.'/pfsense/CertM.HAProxy.Agent.php').
+        ' >/dev/null 2>&1',
+        $output,
+        $phpCode
+    );
+    exec(
+        '/bin/sh -n '.escapeshellarg($root.'/pfsense/certm-haproxy').
+        ' >/dev/null 2>&1',
+        $output,
+        $shellCode
+    );
+    if ($phpCode !== 0 || $shellCode !== 0) {
+        certm_fail('The pfSense update package failed syntax validation.');
+    }
+    return $manifest;
+}
+
+function certm_copy_atomic(
+    string $source,
+    string $target,
+    int $mode = 0700
+): void {
+    $temporary = $target.'.update.'.getmypid();
+    if (!copy($source, $temporary)) {
+        certm_fail("Unable to stage updated file {$target}.");
+    }
+    chmod($temporary, $mode);
+    if (!rename($temporary, $target)) {
+        @unlink($temporary);
+        certm_fail("Unable to replace {$target}.");
+    }
+}
+
+function certm_run_update(bool $manual = false): bool
+{
+    $config = certm_load_config();
+    $token = certm_client_token($config);
+    $response = certm_api(
+        $config,
+        'GET',
+        'client/agent-update',
+        $token
+    );
+    $update = $response['update'] ?? null;
+    if (!is_array($update)) {
+        if ($manual) {
+            certm_log('No pfSense agent update is assigned.');
+        }
+        return false;
+    }
+    if (($update['platform'] ?? null) !== 'pfsense') {
+        certm_fail('CertM assigned a non-pfSense agent package.');
+    }
+
+    $releaseId = (int) ($update['release_id'] ?? 0);
+    $version = (string) ($update['version'] ?? '');
+    $working = '/tmp/certm-pfsense-update-'.getmypid().'-'.
+        bin2hex(random_bytes(4));
+    $archive = $working.'/package.tar.gz';
+    $extracted = $working.'/extracted';
+    $backup = $working.'/backup';
+    if (
+        !mkdir($extracted, 0700, true) ||
+        !mkdir($backup, 0700, true)
+    ) {
+        certm_fail('Unable to create pfSense update workspace.');
+    }
+
+    $targets = [
+        'agent' => __FILE__,
+        'command' => CERTM_PFSENSE_COMMAND,
+        'command_link' => CERTM_PFSENSE_COMMAND_LINK,
+    ];
+    $modified = false;
+    try {
+        $pem = certm_pin_update_key(
+            $config,
+            $token,
+            (string) ($update['signing_key_fingerprint'] ?? '')
+        );
+        certm_download_update(
+            $config,
+            $token,
+            (string) ($update['download_path'] ?? ''),
+            $archive
+        );
+        $actualHash = hash_file('sha256', $archive);
+        if (
+            !is_string($actualHash) ||
+            !hash_equals((string) ($update['sha256'] ?? ''), $actualHash)
+        ) {
+            certm_fail('Downloaded pfSense package SHA-256 mismatch.');
+        }
+        $signature = base64_decode(
+            (string) ($update['signature'] ?? ''),
+            true
+        );
+        $contents = file_get_contents($archive);
+        if (
+            !is_string($signature) ||
+            !is_string($contents) ||
+            openssl_verify(
+                $contents,
+                $signature,
+                $pem,
+                OPENSSL_ALGO_SHA256
+            ) !== 1
+        ) {
+            certm_fail('Downloaded pfSense package signature is invalid.');
+        }
+
+        certm_verify_update_package($archive, $extracted, $version);
+        certm_update_report(
+            $config,
+            $token,
+            $releaseId,
+            'STARTED',
+            "Installing pfSense agent {$version}"
+        );
+
+        foreach ($targets as $name => $target) {
+            if (is_file($target) && !copy($target, $backup.'/'.$name)) {
+                certm_fail("Unable to back up {$target}.");
+            }
+        }
+        $modified = true;
+        certm_copy_atomic(
+            $extracted.'/pfsense/CertM.HAProxy.Agent.php',
+            $targets['agent']
+        );
+        certm_copy_atomic(
+            $extracted.'/pfsense/certm-haproxy',
+            $targets['command']
+        );
+        certm_copy_atomic(
+            $extracted.'/pfsense/certm-haproxy',
+            $targets['command_link']
+        );
+
+        $installed = (string) file_get_contents($targets['agent']);
+        if (!preg_match(
+            "/CERTM_PFSENSE_AGENT_VERSION = '([^']+)'/",
+            $installed,
+            $match
+        ) || $match[1] !== $version) {
+            certm_fail('Updated pfSense agent version self-test failed.');
+        }
+
+        certm_update_report(
+            $config,
+            $token,
+            $releaseId,
+            'SUCCESS',
+            "pfSense agent updated successfully to {$version}",
+            $version
+        );
+        certm_log("CertM pfSense agent updated successfully to {$version}.");
+        return true;
+    } catch (Throwable $exception) {
+        if ($modified) {
+            foreach ($targets as $name => $target) {
+                if (is_file($backup.'/'.$name)) {
+                    certm_copy_atomic($backup.'/'.$name, $target);
+                }
+            }
+        }
+        try {
+            certm_update_report(
+                $config,
+                $token,
+                $releaseId,
+                $modified ? 'ROLLBACK' : 'FAILED',
+                $exception->getMessage()
+            );
+        } catch (Throwable $reportException) {
+            certm_log(
+                'Unable to report pfSense update failure: '.
+                $reportException->getMessage(),
+                'WARN'
+            );
+        }
+        throw $exception;
+    } finally {
+        certm_remove_tree($working);
+    }
 }
 
 function certm_client_token(array $config): string
@@ -1059,6 +1465,20 @@ function certm_with_lock(callable $operation): void
     }
 }
 
+function certm_scheduled_run(): void
+{
+    try {
+        certm_run_update(false);
+    } catch (Throwable $exception) {
+        certm_log(
+            'Agent update check failed; certificate work will continue: '.
+            $exception->getMessage(),
+            'WARN'
+        );
+    }
+    certm_renew(false);
+}
+
 function certm_main(array $argv): int
 {
     $command = strtolower((string) ($argv[1] ?? 'run'));
@@ -1069,12 +1489,14 @@ function certm_main(array $argv): int
                 'status' => certm_status(),
                 'enroll' => certm_enroll(),
                 'inventory' => certm_inventory(),
-                'renew', 'run' => certm_renew(false),
+                'renew' => certm_renew(false),
+                'run' => certm_scheduled_run(),
+                'update' => certm_run_update(true),
                 'dry-run' => certm_renew(true),
                 'install-cron' => certm_install_cron(true),
                 'remove-cron' => certm_install_cron(false),
                 default => certm_fail(
-                    'Usage: CertM.HAProxy.Agent.php status|preflight|enroll|inventory|dry-run|renew|run|install-cron|remove-cron'
+                    'Usage: CertM.HAProxy.Agent.php status|preflight|enroll|inventory|dry-run|renew|run|update|install-cron|remove-cron'
                 ),
             };
         });

@@ -43,13 +43,13 @@ Before editing:
 - Windows uses the native PowerShell `ScheduledTasks` module; do not reintroduce a hard dependency on `schtasks.exe`.
 - Windows bootstrap must force TLS 1.2 before downloading and must stop cleanly when download fails.
 - Installation must preserve an existing client identity unless intentional re-enrollment is explicitly requested.
-- Linux and Windows clients download approved update packages from the authenticated CertM server, not directly from GitHub.
-- The supervised pfSense `update` command refreshes its scripts from the public repository and must preserve the existing client identity.
+- Linux, Windows, and pfSense clients download approved update packages from the authenticated CertM server, not directly from GitHub.
+- The supervised pfSense `update` command uses the same signed CertM update flow and must preserve the existing client identity.
 - New source IP addresses remain blocked until approved in CertM.
 
 ## Release workflow
 
 - Do not create a new agent version for documentation-only changes.
-- For code changes, update both package manifests/version constants as required, validate both platforms, merge first, then tag and publish one official GitHub release.
-- A release must contain Linux and Windows packages, `SHA256SUMS`, valid manifests, and CI-built artifacts.
-- CertM imports official GitHub releases as DRAFT. An administrator tests selected clients before approving a version for AUTO clients.
+- For code changes, bump only the affected platform version, validate all agents, merge first, then publish an official platform release.
+- Linux, Windows, and pfSense packages have independent versions and releases. Every release includes `SHA256SUMS`, a valid manifest, and CI-built artifacts.
+- CertM imports official GitHub releases as DRAFT. An administrator tests selected clients before approving each platform version for AUTO clients.

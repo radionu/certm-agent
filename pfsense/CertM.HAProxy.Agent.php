@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.34';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.35';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -987,6 +987,16 @@ function certm_find_ca_by_fingerprint(string $fingerprint): ?array
     return null;
 }
 
+function certm_append_config_item(string $path, array $item): void
+{
+    $items = config_get_path($path, []);
+    if (!is_array($items)) {
+        $items = [];
+    }
+    $items[] = $item;
+    config_set_path($path, $items);
+}
+
 function certm_import_chain(array $chain): ?string
 {
     $issuerRef = null;
@@ -1008,7 +1018,7 @@ function certm_import_chain(array $chain): ?string
         if ($existing !== null) {
             config_set_path('ca/'.$existing['idx'], $ca);
         } else {
-            config_set_path('ca/', $ca);
+            certm_append_config_item('ca', $ca);
         }
         $issuerRef = (string) $ca['refid'];
     }
@@ -1046,7 +1056,7 @@ function certm_create_certificate(array $package, array $domains): string
     if ($caref !== null) {
         $cert['caref'] = $caref;
     }
-    config_set_path('cert/', $cert);
+    certm_append_config_item('cert', $cert);
     return $refid;
 }
 

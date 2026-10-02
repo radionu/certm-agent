@@ -23,8 +23,11 @@ function config_get_path(string $path, mixed $default = null): mixed
 function config_set_path(string $path, mixed $value): void
 {
     global $testConfig;
-    $append = str_ends_with($path, '/');
-    $parts = array_values(array_filter(explode('/', trim($path, '/')), 'strlen'));
+    $parts = array_values(array_filter(explode('/', $path), 'strlen'));
+    $leaf = array_pop($parts);
+    if ($leaf === null) {
+        return;
+    }
     $cursor =& $testConfig;
     foreach ($parts as $part) {
         if (!isset($cursor[$part]) || !is_array($cursor[$part])) {
@@ -32,11 +35,7 @@ function config_set_path(string $path, mixed $value): void
         }
         $cursor =& $cursor[$part];
     }
-    if ($append) {
-        $cursor[] = $value;
-    } else {
-        $cursor = $value;
-    }
+    $cursor[$leaf] = $value;
 }
 
 function lookup_cert(string $refid): array
@@ -85,6 +84,11 @@ if (!in_array('*.pmr.vn', $certificateDomains, true)) {
     throw new RuntimeException('Test certificate domains: '.json_encode($certificateDomains));
 }
 $testConfig = [
+    'ca' => [[
+        'refid' => 'existing-ca',
+        'descr' => 'Existing CA',
+        'crt' => base64_encode($certificatePem),
+    ]],
     'cert' => [[
         'refid' => 'existing-ref',
         'descr' => 'Existing wildcard',
@@ -113,6 +117,26 @@ $testConfig = [
         ],
     ],
 ];
+
+certm_append_config_item('ca', [
+    'refid' => 'new-ca',
+    'descr' => 'New CA',
+    'crt' => base64_encode($certificatePem),
+]);
+$cas = config_get_path('ca');
+if (count($cas) !== 2 || $cas[0]['refid'] !== 'existing-ca' || $cas[1]['refid'] !== 'new-ca') {
+    throw new RuntimeException('pfSense 2.7.2-compatible CA append did not preserve the collection.');
+}
+
+$newCertificateRef = certm_create_certificate([
+    'leaf' => $certificatePem,
+    'key' => $privateKeyPem,
+    'chain' => [],
+], ['new.pmr.vn']);
+$certificates = config_get_path('cert');
+if (count($certificates) !== 2 || $certificates[0]['refid'] !== 'existing-ref' || $certificates[1]['refid'] !== $newCertificateRef) {
+    throw new RuntimeException('pfSense 2.7.2-compatible certificate append did not preserve the collection.');
+}
 
 $bindings = certm_discover_bindings();
 if (count($bindings) !== 2) {

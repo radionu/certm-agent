@@ -3,6 +3,10 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
+## 1.0.0-rc.35 (pfSense)
+
+- Fixed certificate and CA insertion on pfSense 2.7.2 without changing the HAProxy configuration format used by pfSense 2.8.x.
+
 ## 1.0.0-rc.34 (pfSense)
 
 - Added signed pfSense updates delivered through the authenticated CertM server.

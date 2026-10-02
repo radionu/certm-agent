@@ -18,14 +18,21 @@ class PfSenseAgentContractTest(unittest.TestCase):
     def test_agent_uses_pfsense_certificate_manager_and_haproxy_api(self):
         for contract in (
             "lookup_cert($refid)",
-            "config_set_path('cert/'",
-            "config_set_path('ca/'",
+            "certm_append_config_item('cert', $cert)",
+            "certm_append_config_item('ca', $ca)",
             "write_config(",
             "haproxy_check_run(1)",
         ):
             self.assertIn(contract, AGENT)
         self.assertNotIn("file_put_contents('/var/etc/haproxy", AGENT)
         self.assertNotIn('file_put_contents("/var/etc/haproxy', AGENT)
+
+    def test_agent_does_not_depend_on_new_trailing_slash_append_semantics(self):
+        self.assertIn("function certm_append_config_item", AGENT)
+        self.assertIn("$items[] = $item;", AGENT)
+        self.assertIn("config_set_path($path, $items);", AGENT)
+        self.assertNotIn("config_set_path('cert/', $cert)", AGENT)
+        self.assertNotIn("config_set_path('ca/', $ca)", AGENT)
 
     def test_agent_validates_package_and_rolls_back_configuration(self):
         for contract in (

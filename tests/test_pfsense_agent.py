@@ -27,6 +27,11 @@ class PfSenseAgentContractTest(unittest.TestCase):
         self.assertNotIn("file_put_contents('/var/etc/haproxy", AGENT)
         self.assertNotIn('file_put_contents("/var/etc/haproxy', AGENT)
 
+    def test_fingerprint_hashes_decoded_der_without_openssl_fingerprint_helper(self):
+        self.assertIn("base64_decode($encoded, true)", AGENT)
+        self.assertIn("return hash('sha256', $der);", AGENT)
+        self.assertNotIn("openssl_x509_fingerprint", AGENT)
+
     def test_agent_does_not_depend_on_new_trailing_slash_append_semantics(self):
         self.assertIn("function certm_append_config_item", AGENT)
         self.assertIn("$items[] = $item;", AGENT)

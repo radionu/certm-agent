@@ -3,6 +3,10 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
+## 1.0.0-rc.36 (pfSense)
+
+- Made certificate SHA-256 fingerprint verification portable across pfSense 2.7.2 and 2.8.x by hashing decoded certificate data directly.
+
 ## 1.0.0-rc.35 (pfSense)
 
 - Fixed certificate and CA insertion on pfSense 2.7.2 without changing the HAProxy configuration format used by pfSense 2.8.x.

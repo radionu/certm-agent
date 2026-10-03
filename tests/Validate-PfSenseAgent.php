@@ -83,6 +83,32 @@ $certificateDomains = certm_certificate_domains($certificatePem);
 if (!in_array('*.pmr.vn', $certificateDomains, true)) {
     throw new RuntimeException('Test certificate domains: '.json_encode($certificateDomains));
 }
+if (!preg_match(
+    '/-----BEGIN CERTIFICATE-----\\s*([A-Za-z0-9+\\/=\\s]+?)\\s*-----END CERTIFICATE-----/s',
+    $certificatePem,
+    $certificateMatch
+)) {
+    throw new RuntimeException('Unable to extract DER certificate test data.');
+}
+$certificateDer = base64_decode(
+    preg_replace('/\\s+/', '', $certificateMatch[1]),
+    true
+);
+$expectedFingerprint = hash('sha256', $certificateDer);
+if (certm_fingerprint($certificatePem) !== $expectedFingerprint) {
+    throw new RuntimeException('Portable certificate fingerprint does not match DER SHA-256.');
+}
+if (certm_fingerprint($privateKeyPem."\\n".$certificatePem) !== $expectedFingerprint) {
+    throw new RuntimeException('Portable certificate fingerprint cannot locate PEM certificate data.');
+}
+try {
+    certm_fingerprint('not a certificate');
+    throw new RuntimeException('Malformed certificate unexpectedly produced a fingerprint.');
+} catch (RuntimeException $exception) {
+    if (!str_contains($exception->getMessage(), 'Unable to locate certificate data')) {
+        throw $exception;
+    }
+}
 $testConfig = [
     'ca' => [[
         'refid' => 'existing-ca',

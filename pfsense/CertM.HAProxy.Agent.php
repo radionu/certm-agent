@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.35';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.36';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -617,11 +617,19 @@ function certm_subject(array|string|null $subject): ?string
 
 function certm_fingerprint(string $certificate): string
 {
-    $fingerprint = openssl_x509_fingerprint($certificate, 'sha256');
-    if (!is_string($fingerprint)) {
-        certm_fail('Unable to calculate certificate SHA-256 fingerprint.');
+    if (!preg_match(
+        '/-----BEGIN CERTIFICATE-----\\s*([A-Za-z0-9+\\/=\\s]+?)\\s*-----END CERTIFICATE-----/s',
+        $certificate,
+        $matches
+    )) {
+        certm_fail('Unable to locate certificate data for SHA-256 fingerprint.');
     }
-    return strtolower(str_replace(':', '', $fingerprint));
+    $encoded = preg_replace('/\\s+/', '', (string) $matches[1]);
+    $der = is_string($encoded) ? base64_decode($encoded, true) : false;
+    if (!is_string($der) || $der === '') {
+        certm_fail('Unable to decode certificate data for SHA-256 fingerprint.');
+    }
+    return hash('sha256', $der);
 }
 
 function certm_pem_blocks(string $pem): array

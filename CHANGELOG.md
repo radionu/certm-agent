@@ -3,6 +3,10 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
+## 1.0.0-rc.40 (pfSense)
+
+- Fixed certificate lookup compatibility between pfSense 2.7.2 and 2.8.x, resolving false missing-key warnings and renew rollback on pfSense 2.7.2.
+
 ## 1.0.0-rc.39 (pfSense)
 
 - Added a protected OpenSSL-command fallback for certificate data re-serialized by pfSense 2.7.2 after saving its configuration.

@@ -25,7 +25,7 @@ jobs:
           python3 scripts/build_release.py --output "$RUNNER_TEMP/releases"
           test -f "$RUNNER_TEMP/releases/certm-agent-linux-1.0.0-rc.31.tar.gz"
           test -f "$RUNNER_TEMP/releases/certm-agent-windows-1.0.0-rc.31.zip"
-          test -f "$RUNNER_TEMP/releases/certm-agent-pfsense-1.0.0-rc.39.tar.gz"
+          test -f "$RUNNER_TEMP/releases/certm-agent-pfsense-1.0.0-rc.40.tar.gz"
       - name: Run Linux discovery and safety tests
         run: python3 -m unittest discover -s tests -v
 

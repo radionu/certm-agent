@@ -17,7 +17,7 @@ class PfSenseAgentContractTest(unittest.TestCase):
 
     def test_agent_uses_pfsense_certificate_manager_and_haproxy_api(self):
         for contract in (
-            "lookup_cert($refid)",
+            "certm_lookup_certificate($refid)",
             "certm_append_config_item('cert', $cert)",
             "certm_append_config_item('ca', $ca)",
             "write_config(",
@@ -46,6 +46,14 @@ class PfSenseAgentContractTest(unittest.TestCase):
         )[1].split("function certm_report", 1)[0]
         self.assertIn("certm_fingerprint_file($path)", verification)
         self.assertNotIn("certm_fingerprint($contents)", verification)
+
+    def test_agent_uses_version_independent_certificate_lookup(self):
+        self.assertIn("function certm_lookup_certificate", AGENT)
+        lookup = AGENT.split(
+            "function certm_lookup_certificate", 1
+        )[1].split("function certm_find_ca_by_fingerprint", 1)[0]
+        self.assertIn("config_get_path('cert', [])", lookup)
+        self.assertNotIn("lookup_cert(", lookup)
 
     def test_agent_does_not_depend_on_new_trailing_slash_append_semantics(self):
         self.assertIn("function certm_append_config_item", AGENT)

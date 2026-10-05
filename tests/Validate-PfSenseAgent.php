@@ -41,12 +41,12 @@ function config_set_path(string $path, mixed $value): void
 function lookup_cert(string $refid): array
 {
     global $testConfig;
-    foreach (($testConfig['cert'] ?? []) as $index => $cert) {
+    foreach (($testConfig['cert'] ?? []) as $cert) {
         if (($cert['refid'] ?? '') === $refid) {
-            return ['idx' => $index, 'item' => $cert];
+            return $cert;
         }
     }
-    return ['idx' => null, 'item' => null];
+    return [];
 }
 
 require dirname(__DIR__).'/pfsense/CertM.HAProxy.Agent.php';
@@ -193,6 +193,13 @@ $newCertificateRef = certm_create_certificate([
 $certificates = config_get_path('cert');
 if (count($certificates) !== 2 || $certificates[0]['refid'] !== 'existing-ref' || $certificates[1]['refid'] !== $newCertificateRef) {
     throw new RuntimeException('pfSense 2.7.2-compatible certificate append did not preserve the collection.');
+}
+$newCertificateLookup = certm_lookup_certificate($newCertificateRef);
+if (
+    $newCertificateLookup['idx'] !== 1 ||
+    ($newCertificateLookup['item']['refid'] ?? null) !== $newCertificateRef
+) {
+    throw new RuntimeException('Internal certificate lookup did not normalize pfSense 2.7.2 configuration.');
 }
 
 $bindings = certm_discover_bindings();

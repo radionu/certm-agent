@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.39';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.40';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -822,7 +822,7 @@ function certm_discover_bindings(): array
         $aclDomains = certm_acl_domains($frontend);
         $coveredAclDomains = [];
         foreach (certm_frontend_certificate_refs($frontend) as $refid => $primary) {
-            $lookup = lookup_cert($refid);
+            $lookup = certm_lookup_certificate($refid);
             $cert = $lookup['item'] ?? null;
             if (!is_array($cert) || empty($cert['crt']) || empty($cert['prv'])) {
                 certm_log("Skipping HAProxy certificate {$refid}: certificate or private key is missing.", 'WARN');
@@ -1038,6 +1038,19 @@ function certm_decode_package(array $response, array $desired, array $domains): 
     ];
 }
 
+function certm_lookup_certificate(string $refid): array
+{
+    foreach (config_get_path('cert', []) as $index => $certificate) {
+        if (
+            is_array($certificate) &&
+            hash_equals($refid, (string) ($certificate['refid'] ?? ''))
+        ) {
+            return ['idx' => $index, 'item' => $certificate];
+        }
+    }
+    return ['idx' => null, 'item' => null];
+}
+
 function certm_find_ca_by_fingerprint(string $fingerprint): ?array
 {
     foreach (config_get_path('ca', []) as $index => $ca) {
@@ -1091,7 +1104,7 @@ function certm_import_chain(array $chain): ?string
 
 function certm_install_package(string $refid, array $package): void
 {
-    $lookup = lookup_cert($refid);
+    $lookup = certm_lookup_certificate($refid);
     $cert = $lookup['item'] ?? null;
     if (!is_array($cert) || $lookup['idx'] === null) {
         certm_fail("pfSense certificate {$refid} no longer exists.");
@@ -1163,7 +1176,7 @@ function certm_attach_certificate(array $bindings, string $refid): array
 
 function certm_verify_installed(string $refid, string $expected): void
 {
-    $lookup = lookup_cert($refid);
+    $lookup = certm_lookup_certificate($refid);
     $pem = base64_decode((string) ($lookup['item']['crt'] ?? ''), true);
     if (!is_string($pem) || !hash_equals($expected, certm_fingerprint($pem))) {
         certm_fail("Installed pfSense certificate {$refid} has the wrong fingerprint.");

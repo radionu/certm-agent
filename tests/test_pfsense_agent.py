@@ -47,6 +47,17 @@ class PfSenseAgentContractTest(unittest.TestCase):
         self.assertIn("certm_fingerprint_file($path)", verification)
         self.assertNotIn("certm_fingerprint($contents)", verification)
 
+    def test_http_only_frontends_are_not_inventoried_as_https(self):
+        ports = AGENT.split(
+            "function certm_frontend_ports", 1
+        )[1].split("function certm_frontend_certificate_refs", 1)[0]
+        self.assertIn("return array_values(array_unique($ports));", ports)
+        self.assertNotIn("$ports ?: [443]", ports)
+        discovery = AGENT.split(
+            "function certm_discover_bindings", 1
+        )[1].split("function certm_push_inventory", 1)[0]
+        self.assertIn("if ($ports === [])", discovery)
+
     def test_agent_uses_version_independent_certificate_lookup(self):
         self.assertIn("function certm_lookup_certificate", AGENT)
         lookup = AGENT.split(

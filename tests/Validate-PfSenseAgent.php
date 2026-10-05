@@ -112,7 +112,7 @@ try {
 } finally {
     @unlink($certificateFile);
 }
-if (certm_fingerprint($privateKeyPem."\\n".$certificatePem) !== $expectedFingerprint) {
+if (certm_fingerprint($privateKeyPem."\n".$certificatePem) !== $expectedFingerprint) {
     throw new RuntimeException('Portable certificate fingerprint cannot locate PEM certificate data.');
 }
 $haproxyPemFile = tempnam(sys_get_temp_dir(), 'certm-haproxy-');
@@ -120,7 +120,7 @@ if (
     $haproxyPemFile === false ||
     file_put_contents(
         $haproxyPemFile,
-        $privateKeyPem."\\n".$certificatePem
+        $privateKeyPem."\n".$certificatePem
     ) === false
 ) {
     throw new RuntimeException('Unable to create combined HAProxy PEM test file.');

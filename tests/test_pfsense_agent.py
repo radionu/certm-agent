@@ -31,6 +31,10 @@ class PfSenseAgentContractTest(unittest.TestCase):
         self.assertIn("openssl_x509_export($resource, $certificatePem, false)", AGENT)
         self.assertIn("base64_decode($encoded, true)", AGENT)
         self.assertIn("return hash('sha256', $der);", AGENT)
+        self.assertIn("return certm_fingerprint_via_openssl($certificate);", AGENT)
+        self.assertIn("tempnam(sys_get_temp_dir(), 'certm-x509-')", AGENT)
+        self.assertIn("chmod($temporary, 0600)", AGENT)
+        self.assertIn("@unlink($temporary)", AGENT)
         self.assertNotIn("openssl_x509_fingerprint", AGENT)
 
     def test_haproxy_pem_uses_openssl_cli_der_fingerprint(self):

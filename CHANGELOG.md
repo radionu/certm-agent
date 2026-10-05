@@ -3,6 +3,10 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
+## 1.0.0-rc.37 (pfSense)
+
+- Normalized certificate data before SHA-256 fingerprint verification so pfSense 2.7.2 can deploy certificate packages stored in a non-PEM representation.
+
 ## 1.0.0-rc.36 (pfSense)
 
 - Made certificate SHA-256 fingerprint verification portable across pfSense 2.7.2 and 2.8.x by hashing decoded certificate data directly.

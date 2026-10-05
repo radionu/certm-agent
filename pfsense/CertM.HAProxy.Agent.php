@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.40';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.41';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -780,7 +780,7 @@ function certm_frontend_ports(array $frontend): array
             }
         }
     }
-    return array_values(array_unique($ports ?: [443]));
+    return array_values(array_unique($ports));
 }
 
 function certm_frontend_certificate_refs(array $frontend): array
@@ -819,6 +819,10 @@ function certm_discover_bindings(): array
             certm_log("Skipping HAProxy frontend {$name}: primary frontend is unknown.", 'WARN');
             continue;
         }
+        $ports = certm_frontend_ports($frontend);
+        if ($ports === []) {
+            continue;
+        }
         $aclDomains = certm_acl_domains($frontend);
         $coveredAclDomains = [];
         foreach (certm_frontend_certificate_refs($frontend) as $refid => $primary) {
@@ -845,7 +849,7 @@ function certm_discover_bindings(): array
                 $domains = $patterns;
             }
             $parsed = openssl_x509_parse($pem, false) ?: [];
-            foreach (certm_frontend_ports($frontend) as $port) {
+            foreach ($ports as $port) {
                 foreach ($domains as $domain) {
                     $bindings[] = [
                         'site_name' => $name,
@@ -893,7 +897,7 @@ function certm_discover_bindings(): array
             if (isset($coveredAclDomains[$domain])) {
                 continue;
             }
-            foreach (certm_frontend_ports($frontend) as $port) {
+            foreach ($ports as $port) {
                 $bindings[] = [
                     'site_name' => $name,
                     'site_state' => 'Started',

@@ -3,6 +3,10 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
+## 1.0.0-rc.41 (pfSense)
+
+- Excluded HAProxy frontends without an SSL-enabled address so HTTP-only listeners are not inventoried or deployed as HTTPS.
+
 ## 1.0.0-rc.40 (pfSense)
 
 - Fixed certificate lookup compatibility between pfSense 2.7.2 and 2.8.x, resolving false missing-key warnings and renew rollback on pfSense 2.7.2.

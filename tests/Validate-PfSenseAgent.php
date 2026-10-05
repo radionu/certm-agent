@@ -169,6 +169,18 @@ $testConfig = [
                     'ha_certificates' => ['item' => [[
                         'ssl_certificate' => 'existing-ref',
                     ]]],
+                ], [
+                    'name' => '80',
+                    'status' => 'active',
+                    'a_extaddr' => ['item' => [[
+                        'extaddr_ssl' => 'no',
+                        'extaddr_port' => '80',
+                    ]]],
+                    'ha_acls' => ['item' => [[
+                        'expression' => 'host_matches',
+                        'value' => 'http-only.pmr.vn',
+                    ]]],
+                    'ssloffloadcert' => 'existing-ref',
                 ]],
             ],
         ],
@@ -200,6 +212,11 @@ if (
     ($newCertificateLookup['item']['refid'] ?? null) !== $newCertificateRef
 ) {
     throw new RuntimeException('Internal certificate lookup did not normalize pfSense 2.7.2 configuration.');
+}
+
+$httpFrontend = config_get_path('installedpackages/haproxy/ha_backends/item/1');
+if (certm_frontend_ports($httpFrontend) !== []) {
+    throw new RuntimeException('HTTP-only HAProxy frontend was treated as HTTPS.');
 }
 
 $bindings = certm_discover_bindings();

@@ -27,7 +27,8 @@ class PfSenseAgentContractTest(unittest.TestCase):
         self.assertNotIn("file_put_contents('/var/etc/haproxy", AGENT)
         self.assertNotIn('file_put_contents("/var/etc/haproxy', AGENT)
 
-    def test_fingerprint_hashes_decoded_der_without_openssl_fingerprint_helper(self):
+    def test_fingerprint_normalizes_certificate_and_hashes_decoded_der(self):
+        self.assertIn("openssl_x509_export($resource, $certificatePem, false)", AGENT)
         self.assertIn("base64_decode($encoded, true)", AGENT)
         self.assertIn("return hash('sha256', $der);", AGENT)
         self.assertNotIn("openssl_x509_fingerprint", AGENT)

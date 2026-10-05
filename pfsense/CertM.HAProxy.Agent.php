@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.36';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.37';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -617,12 +617,25 @@ function certm_subject(array|string|null $subject): ?string
 
 function certm_fingerprint(string $certificate): string
 {
+    $certificatePem = $certificate;
     if (!preg_match(
         '/-----BEGIN CERTIFICATE-----\\s*([A-Za-z0-9+\\/=\\s]+?)\\s*-----END CERTIFICATE-----/s',
-        $certificate,
+        $certificatePem,
         $matches
     )) {
-        certm_fail('Unable to locate certificate data for SHA-256 fingerprint.');
+        $resource = @openssl_x509_read($certificate);
+        $certificatePem = '';
+        if (
+            $resource === false ||
+            !openssl_x509_export($resource, $certificatePem, false) ||
+            !preg_match(
+                '/-----BEGIN CERTIFICATE-----\\s*([A-Za-z0-9+\\/=\\s]+?)\\s*-----END CERTIFICATE-----/s',
+                $certificatePem,
+                $matches
+            )
+        ) {
+            certm_fail('Unable to normalize certificate data for SHA-256 fingerprint.');
+        }
     }
     $encoded = preg_replace('/\\s+/', '', (string) $matches[1]);
     $der = is_string($encoded) ? base64_decode($encoded, true) : false;

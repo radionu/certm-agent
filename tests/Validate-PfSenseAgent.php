@@ -98,6 +98,9 @@ $expectedFingerprint = hash('sha256', $certificateDer);
 if (certm_fingerprint($certificatePem) !== $expectedFingerprint) {
     throw new RuntimeException('Portable certificate fingerprint does not match DER SHA-256.');
 }
+if (certm_fingerprint($certificateDer) !== $expectedFingerprint) {
+    throw new RuntimeException('Portable certificate fingerprint cannot normalize DER certificate data.');
+}
 if (certm_fingerprint($privateKeyPem."\\n".$certificatePem) !== $expectedFingerprint) {
     throw new RuntimeException('Portable certificate fingerprint cannot locate PEM certificate data.');
 }
@@ -105,7 +108,7 @@ try {
     certm_fingerprint('not a certificate');
     throw new RuntimeException('Malformed certificate unexpectedly produced a fingerprint.');
 } catch (RuntimeException $exception) {
-    if (!str_contains($exception->getMessage(), 'Unable to locate certificate data')) {
+    if (!str_contains($exception->getMessage(), 'Unable to normalize certificate data')) {
         throw $exception;
     }
 }

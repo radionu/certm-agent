@@ -112,8 +112,25 @@ try {
 } finally {
     @unlink($certificateFile);
 }
-if (certm_fingerprint($privateKeyPem."\\n".$certificatePem) !== $expectedFingerprint) {
+if (certm_fingerprint($privateKeyPem."\n".$certificatePem) !== $expectedFingerprint) {
     throw new RuntimeException('Portable certificate fingerprint cannot locate PEM certificate data.');
+}
+$haproxyPemFile = tempnam(sys_get_temp_dir(), 'certm-haproxy-');
+if (
+    $haproxyPemFile === false ||
+    file_put_contents(
+        $haproxyPemFile,
+        $privateKeyPem."\n".$certificatePem
+    ) === false
+) {
+    throw new RuntimeException('Unable to create combined HAProxy PEM test file.');
+}
+try {
+    if (certm_fingerprint_file($haproxyPemFile) !== $expectedFingerprint) {
+        throw new RuntimeException('HAProxy PEM file fingerprint does not match DER SHA-256.');
+    }
+} finally {
+    @unlink($haproxyPemFile);
 }
 try {
     certm_fingerprint('not a certificate');

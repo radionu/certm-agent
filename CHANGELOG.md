@@ -3,6 +3,10 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
+## 1.0.0-rc.38 (pfSense)
+
+- Verified HAProxy-generated combined PEM files through the pfSense OpenSSL command, fixing post-reload fingerprint checks on pfSense 2.7.2.
+
 ## 1.0.0-rc.37 (pfSense)
 
 - Normalized certificate data before SHA-256 fingerprint verification so pfSense 2.7.2 can deploy certificate packages stored in a non-PEM representation.

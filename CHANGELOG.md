@@ -3,6 +3,10 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
+## 1.0.0-rc.39 (pfSense)
+
+- Added a protected OpenSSL-command fallback for certificate data re-serialized by pfSense 2.7.2 after saving its configuration.
+
 ## 1.0.0-rc.38 (pfSense)
 
 - Verified HAProxy-generated combined PEM files through the pfSense OpenSSL command, fixing post-reload fingerprint checks on pfSense 2.7.2.

@@ -136,7 +136,7 @@ try {
     certm_fingerprint('not a certificate');
     throw new RuntimeException('Malformed certificate unexpectedly produced a fingerprint.');
 } catch (RuntimeException $exception) {
-    if (!str_contains($exception->getMessage(), 'Unable to normalize certificate data')) {
+    if (!str_contains($exception->getMessage(), 'Unable to normalize certificate data using PHP or the OpenSSL command')) {
         throw $exception;
     }
 }

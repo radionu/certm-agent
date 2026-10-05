@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.38';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.39';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -634,7 +634,7 @@ function certm_fingerprint(string $certificate): string
                 $matches
             )
         ) {
-            certm_fail('Unable to normalize certificate data for SHA-256 fingerprint.');
+            return certm_fingerprint_via_openssl($certificate);
         }
     }
     $encoded = preg_replace('/\\s+/', '', (string) $matches[1]);
@@ -652,16 +652,40 @@ function certm_fingerprint_file(string $path): string
     }
     $openssl = trim((string) shell_exec('command -v openssl 2>/dev/null'));
     if ($openssl === '' || !is_executable($openssl)) {
-        certm_fail('The OpenSSL command is required to verify HAProxy certificate files.');
+        certm_fail('The OpenSSL command is required to verify certificate files.');
     }
     $der = shell_exec(
         escapeshellarg($openssl).' x509 -in '.escapeshellarg($path).
         ' -outform DER 2>/dev/null'
     );
     if (!is_string($der) || $der === '') {
-        certm_fail("Unable to read certificate data from HAProxy PEM file: {$path}");
+        certm_fail("Unable to read X.509 certificate data from file: {$path}");
     }
     return hash('sha256', $der);
+}
+
+function certm_fingerprint_via_openssl(string $certificate): string
+{
+    $temporary = tempnam(sys_get_temp_dir(), 'certm-x509-');
+    if ($temporary === false) {
+        certm_fail('Unable to create temporary certificate file for SHA-256 fingerprint.');
+    }
+    try {
+        if (
+            file_put_contents($temporary, $certificate, LOCK_EX) === false ||
+            !chmod($temporary, 0600)
+        ) {
+            certm_fail('Unable to protect temporary certificate data for SHA-256 fingerprint.');
+        }
+        return certm_fingerprint_file($temporary);
+    } catch (Throwable $exception) {
+        certm_fail(
+            'Unable to normalize certificate data using PHP or the OpenSSL command: '.
+            $exception->getMessage()
+        );
+    } finally {
+        @unlink($temporary);
+    }
 }
 
 function certm_pem_blocks(string $pem): array

@@ -98,8 +98,19 @@ $expectedFingerprint = hash('sha256', $certificateDer);
 if (certm_fingerprint($certificatePem) !== $expectedFingerprint) {
     throw new RuntimeException('Portable certificate fingerprint does not match DER SHA-256.');
 }
-if (certm_fingerprint($certificateDer) !== $expectedFingerprint) {
-    throw new RuntimeException('Portable certificate fingerprint cannot normalize DER certificate data.');
+$certificateFile = tempnam(sys_get_temp_dir(), 'certm-fingerprint-');
+if (
+    $certificateFile === false ||
+    file_put_contents($certificateFile, $certificatePem) === false
+) {
+    throw new RuntimeException('Unable to create certificate normalization test file.');
+}
+try {
+    if (certm_fingerprint('file://'.$certificateFile) !== $expectedFingerprint) {
+        throw new RuntimeException('Portable certificate fingerprint cannot normalize OpenSSL certificate data.');
+    }
+} finally {
+    @unlink($certificateFile);
 }
 if (certm_fingerprint($privateKeyPem."\\n".$certificatePem) !== $expectedFingerprint) {
     throw new RuntimeException('Portable certificate fingerprint cannot locate PEM certificate data.');

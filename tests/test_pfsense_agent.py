@@ -33,6 +33,16 @@ class PfSenseAgentContractTest(unittest.TestCase):
         self.assertIn("return hash('sha256', $der);", AGENT)
         self.assertNotIn("openssl_x509_fingerprint", AGENT)
 
+    def test_haproxy_pem_uses_openssl_cli_der_fingerprint(self):
+        self.assertIn("function certm_fingerprint_file", AGENT)
+        self.assertIn("' x509 -in '.escapeshellarg($path)", AGENT)
+        self.assertIn("' -outform DER 2>/dev/null'", AGENT)
+        verification = AGENT.split(
+            "function certm_verify_haproxy_pem", 1
+        )[1].split("function certm_report", 1)[0]
+        self.assertIn("certm_fingerprint_file($path)", verification)
+        self.assertNotIn("certm_fingerprint($contents)", verification)
+
     def test_agent_does_not_depend_on_new_trailing_slash_append_semantics(self):
         self.assertIn("function certm_append_config_item", AGENT)
         self.assertIn("$items[] = $item;", AGENT)

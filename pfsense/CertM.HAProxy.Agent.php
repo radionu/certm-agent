@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.37';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.38';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -645,6 +645,25 @@ function certm_fingerprint(string $certificate): string
     return hash('sha256', $der);
 }
 
+function certm_fingerprint_file(string $path): string
+{
+    if (!is_file($path) || !is_readable($path)) {
+        certm_fail("Certificate file is not readable: {$path}");
+    }
+    $openssl = trim((string) shell_exec('command -v openssl 2>/dev/null'));
+    if ($openssl === '' || !is_executable($openssl)) {
+        certm_fail('The OpenSSL command is required to verify HAProxy certificate files.');
+    }
+    $der = shell_exec(
+        escapeshellarg($openssl).' x509 -in '.escapeshellarg($path).
+        ' -outform DER 2>/dev/null'
+    );
+    if (!is_string($der) || $der === '') {
+        certm_fail("Unable to read certificate data from HAProxy PEM file: {$path}");
+    }
+    return hash('sha256', $der);
+}
+
 function certm_pem_blocks(string $pem): array
 {
     preg_match_all(
@@ -1129,14 +1148,7 @@ function certm_verify_installed(string $refid, string $expected): void
 
 function certm_verify_haproxy_pem(string $path, string $expected): void
 {
-    if (!is_file($path)) {
-        certm_fail("HAProxy did not generate the expected certificate file: {$path}");
-    }
-    $contents = file_get_contents($path);
-    if (!is_string($contents) || openssl_x509_read($contents) === false) {
-        certm_fail("HAProxy generated an invalid certificate file: {$path}");
-    }
-    if (!hash_equals($expected, certm_fingerprint($contents))) {
+    if (!hash_equals($expected, certm_fingerprint_file($path))) {
         certm_fail("HAProxy generated certificate {$path} has the wrong fingerprint.");
     }
 }

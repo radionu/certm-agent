@@ -336,7 +336,11 @@ server {
                         agent,
                         "api_request",
                         return_value={"summary": {}},
-                    ) as request:
+                    ) as request, mock.patch.object(
+                        agent,
+                        "configured_ip_addresses",
+                        return_value=["10.20.30.40", "2001:db8::40"],
+                    ):
                 agent.push_inventory([], "token", "machine-id")
         finally:
             agent.CONFIG = previous
@@ -345,7 +349,26 @@ server {
         self.assertEqual(payload["hostname"], "edge-01")
         self.assertEqual(payload["display_name"], "Nginx Edge 01")
         self.assertEqual(payload["agent_version"], agent.AGENT_VERSION)
+        self.assertEqual(
+            payload["ip_addresses"],
+            ["10.20.30.40", "2001:db8::40"],
+        )
         self.assertEqual(payload["items"], [])
+
+    def test_configured_ip_addresses_excludes_loopback_and_link_local(self):
+        output = """1: lo inet 127.0.0.1/8 scope host lo
+2: eth0 inet 10.0.0.12/24 scope global eth0
+2: eth0 inet6 2001:db8::12/64 scope global
+2: eth0 inet6 fe80::12/64 scope link
+"""
+        result = subprocess.CompletedProcess([], 0, output, "")
+
+        with mock.patch.object(agent.shutil, "which") as which, \
+                mock.patch.object(agent.subprocess, "run", return_value=result):
+            which.side_effect = lambda name: "/sbin/ip" if name == "ip" else "/bin/hostname"
+            addresses = agent.configured_ip_addresses()
+
+        self.assertEqual(addresses, ["10.0.0.12", "2001:db8::12"])
 
     def test_every_api_request_reports_agent_type_and_version_headers(self):
         previous = agent.CONFIG
@@ -1401,6 +1424,10 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
         )
         self.assertEqual(request.call_args_list[0].args[1], "/client/preflight")
         self.assertEqual(request.call_args_list[1].args[1], "/client/enroll")
+        self.assertIn(
+            "ip_addresses",
+            request.call_args_list[1].args[4],
+        )
         save.assert_called_once_with("ct_client_6")
 
     def test_served_verification_error_identifies_endpoint_and_files(self):
@@ -1432,3 +1459,4 @@ class LinuxInstallAndPreflightTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -3,6 +3,14 @@
 This file records user-visible changes. Installation and operating instructions
 are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 
+## 1.0.0-rc.42 (pfSense)
+
+- Report all active configured IPv4 and IPv6 addresses to CertM during enrollment and inventory.
+
+## 1.0.0-rc.32 (Linux and Windows)
+
+- Report all active configured IPv4 and IPv6 addresses to CertM during enrollment and inventory. Zimbra uses the Linux agent and receives the same behavior.
+
 ## 1.0.0-rc.41 (pfSense)
 
 - Excluded HAProxy frontends without an SSL-enabled address so HTTP-only listeners are not inventoried or deployed as HTTPS.
@@ -149,3 +157,4 @@ are kept in [README.md](README.md) and [README_vi.MD](README_vi.MD).
 ## 1.0.0-rc.11
 
 - Published versioned Linux and Windows agent packages.
+

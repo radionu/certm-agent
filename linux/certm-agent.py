@@ -25,6 +25,7 @@ import argparse
 import base64
 import fcntl
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -48,7 +49,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.31"
+AGENT_VERSION = "1.0.0-rc.32"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -312,6 +313,69 @@ def api_request(method, path, token, machine_id, payload=None, query=None):
         except Exception:
             detail = body
         raise ApiError(exc.code, detail) from exc
+
+
+def configured_ip_addresses():
+    addresses = set()
+    ip_command = shutil.which("ip")
+    commands = []
+    if ip_command:
+        commands.append([ip_command, "-o", "addr", "show", "up", "scope", "global"])
+    hostname_command = shutil.which("hostname")
+    if hostname_command:
+        commands.append([hostname_command, "-I"])
+
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode != 0:
+            continue
+
+        candidates = []
+        if command[-1] == "-I":
+            candidates = result.stdout.split()
+        else:
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                for family in ("inet", "inet6"):
+                    if family in fields:
+                        index = fields.index(family)
+                        if index + 1 < len(fields):
+                            candidates.append(fields[index + 1].split("/", 1)[0])
+
+        for candidate in candidates:
+            candidate = candidate.split("%", 1)[0]
+            try:
+                address = ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            if (
+                address.is_loopback
+                or address.is_link_local
+                or address.is_unspecified
+                or address.is_multicast
+            ):
+                continue
+            addresses.add(address.compressed)
+
+        if addresses:
+            break
+
+    return sorted(
+        addresses,
+        key=lambda value: (
+            ipaddress.ip_address(value).version,
+            int(ipaddress.ip_address(value)),
+        ),
+    )
 
 
 def read_os_release():
@@ -1371,6 +1435,7 @@ def push_inventory(bindings, token, machine_id):
             "hostname": socket.gethostname(),
             "display_name": str(CONFIG.get("display_name", "")).strip(),
             "agent_version": AGENT_VERSION,
+            "ip_addresses": configured_ip_addresses(),
             "items": items,
         },
     )
@@ -2062,6 +2127,7 @@ def enrollment_payload(os_release):
         "agent_version": AGENT_VERSION,
         "os_name": os_release.get("id") or os_release.get("name") or "linux",
         "os_version": os_release.get("version_id") or "",
+        "ip_addresses": configured_ip_addresses(),
     }
 
 
@@ -2579,3 +2645,4 @@ if __name__ == "__main__":
         LOGGER.exception("CertM agent failed")
         print(f"ERROR {exc}", file=sys.stderr)
         sys.exit(1)
+

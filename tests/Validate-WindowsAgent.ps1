@@ -38,7 +38,7 @@ Assert-True ($installer -notmatch 'EnrollmentToken\.Length\s+-lt') `
     'The IIS installer must not impose a minimum bootstrap enrollment-key length.'
 Assert-True ($installer -match 'EnrollmentToken\.Length\s+-eq\s+0') `
     'The IIS installer must reject only an empty bootstrap enrollment key.'
-Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.31'") `
+Assert-True ($agent -match "AgentVersion\s*=\s*'1\.0\.0-rc\.32'") `
     'The IIS agent release candidate version is missing.'
 Assert-True ($agent -match 'LogTimeOffset\s*=\s*\[TimeSpan\]::FromHours\(7\)') `
     'The IIS log timestamp must use the fixed UTC+07:00 offset.'
@@ -114,6 +114,10 @@ Assert-True ($agent -match '''X-CertM-Agent-Version''\s*=\s*\$script:AgentVersio
     'Every IIS API request must report the running agent version.'
 Assert-True ($agent -match 'agent_version\s*=\s*\$script:AgentVersion') `
     'IIS inventory must report the running agent version.'
+Assert-True ($agent -match 'function\s+Get-ConfiguredIpAddresses') `
+    'The IIS agent must discover configured IPv4 and IPv6 addresses.'
+Assert-True (($agent | Select-String -Pattern 'ip_addresses\s*=\s*@\(Get-ConfiguredIpAddresses\)' -AllMatches).Matches.Count -ge 2) `
+    'IIS enrollment and inventory must report configured IP addresses.'
 Assert-True ($agent -match 'site_state\s*=\s*\[string\]\$site\.State') `
     'IIS discovery must record whether each site is started or stopped.'
 Assert-True ($agent -match 'site_state\s*=\s*\$_\.site_state') `
@@ -202,3 +206,4 @@ Assert-True (($agent + $installer + $bootstrap + $updater + $uninstaller) -notma
     'Windows agent scripts must not use the obsolete ProgramData installation root.'
 
 Write-Host 'Windows agent contract validation passed.'
+

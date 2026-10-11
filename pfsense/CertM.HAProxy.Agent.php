@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.41';
+const CERTM_PFSENSE_AGENT_VERSION = '1.0.0-rc.42';
 const CERTM_PFSENSE_AGENT_TYPE = 'pfsense-haproxy';
 const CERTM_PFSENSE_SERVICE = 'pfsense-haproxy';
 const CERTM_PFSENSE_CONFIG = '/conf/certm/config.json';
@@ -119,6 +119,51 @@ function certm_pfsense_version(): string
     }
 
     return '';
+}
+
+function certm_configured_ip_addresses(): array
+{
+    $lines = [];
+    $status = 0;
+    exec('/sbin/ifconfig -a 2>/dev/null', $lines, $status);
+    if ($status !== 0) {
+        return [];
+    }
+
+    $addresses = [];
+    foreach ($lines as $line) {
+        $candidate = null;
+        if (preg_match('/^\s*inet\s+([^\s]+)/', $line, $match)) {
+            $candidate = $match[1];
+        } elseif (preg_match('/^\s*inet6\s+([^\s]+)/', $line, $match)) {
+            $candidate = explode('%', $match[1], 2)[0];
+        }
+        if ($candidate === null || filter_var($candidate, FILTER_VALIDATE_IP) === false) {
+            continue;
+        }
+
+        $lower = strtolower($candidate);
+        if (
+            $candidate === '0.0.0.0' ||
+            str_starts_with($candidate, '127.') ||
+            str_starts_with($candidate, '169.254.') ||
+            in_array($lower, ['::', '::1'], true) ||
+            str_starts_with($lower, 'fe80:') ||
+            str_starts_with($lower, 'ff')
+        ) {
+            continue;
+        }
+
+        $packed = inet_pton($candidate);
+        $normalized = is_string($packed) ? inet_ntop($packed) : false;
+        if (is_string($normalized)) {
+            $addresses[$normalized] = $normalized;
+        }
+    }
+
+    $addresses = array_values($addresses);
+    natcasesort($addresses);
+    return array_values($addresses);
 }
 
 function certm_headers(string $token): array
@@ -971,6 +1016,7 @@ function certm_push_inventory(array $config, string $token, array $bindings): ar
         'agent_version' => CERTM_PFSENSE_AGENT_VERSION,
         'os_name' => 'pfSense',
         'os_version' => certm_pfsense_version(),
+        'ip_addresses' => certm_configured_ip_addresses(),
         'items' => $items,
     ]);
     certm_log('Inventory sent; '.count($items).' HAProxy HTTPS binding(s) discovered.');
@@ -1257,6 +1303,7 @@ function certm_enroll(): void
         'agent_version' => CERTM_PFSENSE_AGENT_VERSION,
         'os_name' => 'pfSense',
         'os_version' => certm_pfsense_version(),
+        'ip_addresses' => certm_configured_ip_addresses(),
     ]);
     $clientToken = trim((string) ($response['client_token'] ?? ''));
     if ($clientToken === '') {
@@ -1594,3 +1641,4 @@ function certm_main(array $argv): int
 if (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
     exit(certm_main($argv));
 }
+

@@ -106,6 +106,14 @@ class PfSenseAgentContractTest(unittest.TestCase):
         self.assertIn("'os_name' => 'pfSense'", inventory)
         self.assertIn("'os_version' => certm_pfsense_version()", inventory)
 
+    def test_inventory_and_enrollment_report_configured_ip_addresses(self):
+        self.assertIn("function certm_configured_ip_addresses(): array", AGENT)
+        self.assertIn("'/sbin/ifconfig -a 2>/dev/null'", AGENT)
+        self.assertGreaterEqual(
+            AGENT.count("'ip_addresses' => certm_configured_ip_addresses()"),
+            2,
+        )
+
     def test_status_is_safe_and_operational(self):
         for contract in (
             "function certm_status()",
@@ -169,3 +177,4 @@ class PfSenseAgentContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

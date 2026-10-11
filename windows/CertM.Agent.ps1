@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$script:AgentVersion = '1.0.0-rc.31'
+$script:AgentVersion = '1.0.0-rc.32'
 $script:CertMRoot = 'C:\CertM'
 $script:Mutex = $null
 $script:LogTimeOffset = [TimeSpan]::FromHours(7)
@@ -131,6 +131,36 @@ function Write-JsonFileAtomic {
 function Get-MachineId {
     $machineGuid = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid).MachineGuid
     return "windows:$($machineGuid.ToString().ToLowerInvariant())"
+}
+
+function Get-ConfiguredIpAddresses {
+    $addresses = New-Object Collections.Generic.List[string]
+
+    foreach ($networkInterface in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+        if ($networkInterface.OperationalStatus -ne [Net.NetworkInformation.OperationalStatus]::Up) {
+            continue
+        }
+
+        foreach ($unicast in $networkInterface.GetIPProperties().UnicastAddresses) {
+            $address = $unicast.Address
+            if ($null -eq $address) { continue }
+            if ($address.AddressFamily -notin @(
+                [Net.Sockets.AddressFamily]::InterNetwork,
+                [Net.Sockets.AddressFamily]::InterNetworkV6
+            )) { continue }
+            if ([Net.IPAddress]::IsLoopback($address)) { continue }
+            if (
+                $address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6 -and
+                ($address.IsIPv6LinkLocal -or $address.IsIPv6Multicast)
+            ) { continue }
+
+            $text = $address.ToString().Split('%')[0]
+            if ($text -eq '0.0.0.0' -or $text -like '169.254.*') { continue }
+            [void]$addresses.Add($text)
+        }
+    }
+
+    return @($addresses | Sort-Object -Unique)
 }
 
 function Invoke-CertMApi {
@@ -632,6 +662,7 @@ function Send-Inventory {
         hostname = $env:COMPUTERNAME
         display_name = [string]$script:Config.display_name
         agent_version = $script:AgentVersion
+        ip_addresses = @(Get-ConfiguredIpAddresses)
         items = $items
     } | Out-Null
 }
@@ -1066,6 +1097,7 @@ try {
             agent_version = $script:AgentVersion
             os_name = $os.Caption
             os_version = $os.Version
+            ip_addresses = @(Get-ConfiguredIpAddresses)
         }
         $protectedClientToken = Protect-LocalMachineSecret $enrollment.client_token
         if ($script:Config.PSObject.Properties.Name -contains 'client_token_protected') {
@@ -1199,3 +1231,4 @@ catch {
 finally {
     if ($script:Mutex) { $script:Mutex.ReleaseMutex(); $script:Mutex.Dispose() }
 }
+

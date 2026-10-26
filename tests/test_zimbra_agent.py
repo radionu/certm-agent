@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 import argparse
 import subprocess
 import tempfile
@@ -128,6 +129,7 @@ class ZimbraSafetyTest(unittest.TestCase):
             events = []
             def execute(*args, **kwargs):
                 events.append(args)
+                return subprocess.CompletedProcess([], 0, '', '')
             with mock.patch.object(agent, 'zimbra_backup', return_value=stage), \
                  mock.patch.object(agent, 'run', return_value=subprocess.CompletedProcess([], 1)), \
                  mock.patch.object(agent, 'fingerprint_file', return_value='b' * 64), \
@@ -136,12 +138,101 @@ class ZimbraSafetyTest(unittest.TestCase):
                  mock.patch.object(agent.os, 'chown'), \
                  mock.patch.object(Path, 'chmod'), \
                  mock.patch.object(agent, 'zimbra_run', side_effect=execute), \
-                 mock.patch.object(agent, 'zimbra_verify', side_effect=lambda *a: events.append(('verify',)) or 'a' * 64):
+                 mock.patch.object(agent, 'zimbra_check_service_health'), \
+                 mock.patch.object(agent, 'zimbra_verify_certificate', side_effect=lambda *a: events.append(('verify',)) or 'a' * 64):
                 self.assertEqual(agent.zimbra_deploy(stage, {}, 'a' * 64), 'a' * 64)
             self.assertIn('-localonly', events[0])
             self.assertEqual(events[1][1], 'restart')
             self.assertEqual(events[2], ('verify',))
             self.assertEqual(events[3][1], 'savecrt')
+
+
+class ZimbraServiceHealthTest(unittest.TestCase):
+    def test_stopped_stats_is_named_even_when_command_succeeds(self):
+        result = subprocess.CompletedProcess([], 0, 'Host mail1.pmr.vn\n stats Stopped\n mailbox Running\n', '')
+        with mock.patch.object(agent, 'zimbra_run', return_value=result):
+            with self.assertRaisesRegex(agent.ZimbraServiceHealthError, 'stopped services: stats'):
+                agent.zimbra_check_service_health()
+
+    def test_status_failures_are_service_errors(self):
+        for result in (subprocess.CompletedProcess([], 1, '', 'Cannot determine services'),
+                       subprocess.CompletedProcess([], 0, '', '')):
+            with self.subTest(result=result), mock.patch.object(agent, 'zimbra_run', return_value=result):
+                with self.assertRaises(agent.ZimbraServiceHealthError):
+                    agent.zimbra_check_service_health()
+        with mock.patch.object(agent, 'zimbra_run', side_effect=TimeoutError('status timed out')):
+            with self.assertRaises(agent.ZimbraServiceHealthError):
+                agent.zimbra_check_service_health()
+
+    def test_healthy_services_pass(self):
+        with mock.patch.object(agent, 'zimbra_run', return_value=subprocess.CompletedProcess(
+                [], 0, 'Host mail1.pmr.vn\n stats Running\n zimbra webapp Running\n', '')):
+            agent.zimbra_check_service_health()
+
+    def test_current_certificate_with_stopped_stats_never_redeploys(self):
+        for emergency in (False, True):
+            with self.subTest(emergency=emergency), ExitStack() as stack:
+                patches = {
+                    'zimbra_binding': mock.Mock(return_value={'domain': 'mail1.pmr.vn', 'certificate_path': '/unused'}),
+                    'read_active_identity': mock.Mock(return_value=('token', 'machine')),
+                    'push_inventory': mock.Mock(),
+                    'desired_for': mock.Mock(return_value={'fingerprint_sha256': 'a' * 64}),
+                    'fingerprint_file': mock.Mock(return_value='a' * 64),
+                    'zimbra_verify_certificate': mock.Mock(return_value='a' * 64),
+                    'zimbra_check_service_health': mock.Mock(side_effect=agent.ZimbraServiceHealthError('stats Stopped')),
+                    'api_request': mock.Mock(),
+                    'zimbra_deploy': mock.Mock(),
+                    'zimbra_window': mock.Mock(return_value=True),
+                }
+                stack.enter_context(mock.patch.multiple(agent, **patches))
+                with self.assertRaisesRegex(agent.ZimbraServiceHealthError, 'stats'):
+                    agent.zimbra_main(argparse.Namespace(command='renew', emergency=emergency, dry_run=False))
+                patches['api_request'].assert_not_called()
+                patches['zimbra_deploy'].assert_not_called()
+
+    def test_deployment_retains_verified_certificate_when_stats_stopped(self):
+        self.deployment_case(health_error=True)
+
+    def test_nonzero_restart_does_not_rollback_verified_certificate(self):
+        self.deployment_case(restart_exit=1)
+
+    def test_certificate_failure_still_rolls_back(self):
+        self.deployment_case(cert_error=True)
+
+    def deployment_case(self, health_error=False, restart_exit=0, cert_error=False):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            stage = Path(directory)
+            previous = stage / 'ssl/zimbra/commercial'
+            previous.mkdir(parents=True)
+            for name in ('commercial.crt', 'commercial.key', 'commercial_ca.crt'):
+                (stage / name).write_text('new test material')
+                (previous / name).write_text('previous test material')
+            runner = mock.Mock(side_effect=lambda *a, **kw: subprocess.CompletedProcess(
+                [], restart_exit if a[1] == 'restart' else 0, '', ''))
+            verify = mock.Mock(side_effect=RuntimeError('TLS mismatch') if cert_error else None,
+                               return_value='a' * 64)
+            patches = {
+                'zimbra_backup': mock.Mock(return_value=stage),
+                'run': mock.Mock(return_value=subprocess.CompletedProcess([], 0)),
+                'fingerprint_file': mock.Mock(return_value='b' * 64),
+                'atomic_write': mock.Mock(),
+                'zimbra_run': runner,
+                'zimbra_verify_certificate': verify,
+                'zimbra_verify': mock.Mock(return_value='b' * 64),
+                'zimbra_check_service_health': mock.Mock(
+                    side_effect=agent.ZimbraServiceHealthError('stats Stopped') if health_error else None),
+            }
+            stack.enter_context(mock.patch.multiple(agent, **patches))
+            stack.enter_context(mock.patch.object(agent.pwd, 'getpwnam', return_value=argparse.Namespace(pw_uid=0, pw_gid=0)))
+            stack.enter_context(mock.patch.object(agent.os, 'chown'))
+            stack.enter_context(mock.patch.object(Path, 'chmod'))
+            error = RuntimeError if cert_error else agent.ZimbraServiceHealthError
+            with self.assertRaises(error):
+                agent.zimbra_deploy(stage, {}, 'a' * 64)
+            commands = [c.args[1] for c in runner.call_args_list]
+            self.assertEqual(commands.count('deploycrt'), 2 if cert_error else 1)
+            self.assertEqual(commands.count('restart'), 2 if cert_error else 1)
+            self.assertEqual(commands.count('savecrt'), 1)
 
 
 class ZimbraRootChainTest(unittest.TestCase):

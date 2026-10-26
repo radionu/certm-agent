@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-AGENT_VERSION = "1.0.0-rc.32"
+AGENT_VERSION = "1.0.0-rc.33"
 NOFILE_FLOOR = 4096
 LOG_TIMEZONE = timezone(timedelta(hours=7))
 DEFAULT_CONFIG_FILE = Path("/etc/certm/agent.json")
@@ -2327,7 +2327,40 @@ def zimbra_trusted_roots():
     return context.get_ca_certs(binary_form=True)
 
 
+class ZimbraServiceHealthError(RuntimeError):
+    """Certificate checks passed, but service health needs operator attention."""
+
+
+def zimbra_check_service_health():
+    try:
+        status = zimbra_run('/opt/zimbra/bin/zmcontrol', 'status', check=False, timeout=120)
+    except Exception as exc:
+        raise ZimbraServiceHealthError(
+            'Zimbra certificate verified; unable to check service health. '
+            'No certificate redeployment or rollback: ' + str(exc)) from exc
+    output = (status.stdout or '') + (status.stderr or '')
+    stopped = re.findall(r'^\s*([\w.-]+)\s+Stopped\b', output, re.M | re.I)
+    if stopped:
+        detail = 'stopped services: ' + ', '.join(stopped)
+    elif status.returncode != 0 or re.search(
+            r'\bStopped\b|certificate verify failed|Cannot determine services', output, re.I):
+        detail = 'zmcontrol status failed (exit ' + str(status.returncode) + ')'
+    elif not re.search(r'^\s*[\w.-]+(?: webapp)?\s+Running\s*$', output, re.M):
+        detail = 'zmcontrol status returned no recognized running services'
+    else:
+        return
+    raise ZimbraServiceHealthError(
+        'Zimbra certificate verified; ' + detail +
+        '. No certificate redeployment or rollback; repair service health separately')
+
+
 def zimbra_verify(binding, expected):
+    served = zimbra_verify_certificate(binding, expected)
+    zimbra_check_service_health()
+    return served
+
+
+def zimbra_verify_certificate(binding, expected):
     # mailboxd.pem is an exported view, not the authoritative Java keystore.
     zimbra_run('/opt/zimbra/bin/zmcertmgr', 'viewdeployedcrt', 'mailboxd')
     if not (ZIMBRA_HOME / 'mailboxd/etc/mailboxd.pem').is_file():
@@ -2349,10 +2382,6 @@ def zimbra_verify(binding, expected):
     der = ssl.PEM_cert_to_DER_cert(pem.group(0))
     if hashlib.sha256(der).hexdigest() != expected:
         raise RuntimeError('LDAP STARTTLS is not serving the expected certificate')
-    status = zimbra_run('/opt/zimbra/bin/zmcontrol', 'status', timeout=120)
-    if re.search(r'\bStopped\b|certificate verify failed|Cannot determine services',
-                 status.stdout + status.stderr, re.I):
-        raise RuntimeError('Zimbra service health check failed after deployment')
     return served
 
 
@@ -2477,10 +2506,9 @@ def zimbra_deploy(stage, binding, expected):
         zimbra_run('/opt/zimbra/bin/zmcertmgr', 'deploycrt', 'comm',
                    stage / 'commercial.crt', stage / 'commercial_ca.crt', '-localonly', timeout=300)
         log('Restarting Zimbra to activate the new certificate; this may take several minutes')
-        zimbra_run('/opt/zimbra/bin/zmcontrol', 'restart', timeout=900)
-        served = zimbra_verify(binding, expected)
+        restart = zimbra_run('/opt/zimbra/bin/zmcontrol', 'restart', check=False, timeout=900)
+        served = zimbra_verify_certificate(binding, expected)
         zimbra_run('/opt/zimbra/bin/zmcertmgr', 'savecrt', 'comm', timeout=120)
-        return served
     except Exception as exc:
         if not old_valid:
             # Never automatically replace the new cert with an expired cert.
@@ -2502,6 +2530,15 @@ def zimbra_deploy(stage, binding, expected):
         except Exception as rollback_exc:
             rollback = 'Rollback failed: ' + str(rollback_exc)
         raise RuntimeError(str(exc) + '. ' + rollback + '; backup=' + str(backup)) from exc
+
+    # Service health cannot undo a certificate verified on every TLS endpoint.
+    # Keep this outside the certificate transaction's rollback handler.
+    zimbra_check_service_health()
+    if restart.returncode != 0:
+        raise ZimbraServiceHealthError(
+            'Zimbra certificate deployed, verified and saved; restart returned exit ' +
+            str(restart.returncode) + '. No rollback; inspect Zimbra service logs')
+    return served
 
 
 def zimbra_main(args):
@@ -2544,8 +2581,11 @@ def zimbra_main(args):
             zimbra_verify(binding, expected)
             log('Zimbra certificate is current and verified')
             return
+        except ZimbraServiceHealthError:
+            # A stopped stats collector must never trigger a new deployment.
+            raise
         except Exception as exc:
-            warn('Zimbra needs certificate/service repair: ' + str(exc))
+            warn('Zimbra needs certificate repair: ' + str(exc))
     if args.dry_run:
         log('DRY RUN: would download, validate, deploy and restart Zimbra; window=00:00-04:00 UTC+07')
         return
